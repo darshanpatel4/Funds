@@ -65,7 +65,8 @@ double dailyRate(Loan loan) {
 }
 
 /// Interest for one month on [amount] paise.
-int monthlyInterest(Loan loan, int amount) => (amount * dailyRate(loan) * 30).round();
+int monthlyInterest(Loan loan, int amount) =>
+    (amount * dailyRate(loan) * 30 / 100).round() * 100;
 
 /// The state of [loan] on [asOf], from its [entries].
 LoanStatus loanStatus(Loan loan, Iterable<Entry> entries, DateTime asOf) {
@@ -115,7 +116,8 @@ LoanStatus loanStatus(Loan loan, Iterable<Entry> entries, DateTime asOf) {
     given: given,
     returned: returned,
     principal: principal,
-    interestDue: accrued.round(),
+    // Interest is shown and paid in whole rupees.
+    interestDue: (accrued / 100).round() * 100,
     interestPaid: interestPaid,
     since: since,
   );

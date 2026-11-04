@@ -361,7 +361,8 @@ class _BudgetCard extends StatelessWidget {
     final left = budget - spent;
     final ratio = spent / budget;
     final daysLeft = daysInMonth(now.year, now.month) - now.day + 1;
-    final perDay = left > 0 ? left ~/ daysLeft : 0;
+    // Whole rupees a day (no paise).
+    final perDay = left > 0 ? (left / daysLeft / 100).floor() * 100 : 0;
     final over = left < 0;
     final warn = !over && ratio >= 0.8;
     final days = '$daysLeft ${daysLeft == 1 ? 'day' : 'days'}';

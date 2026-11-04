@@ -15,7 +15,8 @@ int depositValue(int principal, double rate, Compounding c, int days) {
   final value = c == Compounding.simple
       ? principal * (1 + r * years)
       : principal * math.pow(1 + r / c.perYear, c.perYear * years);
-  return value.round();
+  // Whole rupees, like a bank statement.
+  return (value / 100).round() * 100;
 }
 
 /// Total days of the FD.

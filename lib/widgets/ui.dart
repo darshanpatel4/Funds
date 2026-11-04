@@ -481,6 +481,8 @@ class SplitBar extends StatelessWidget {
       child: SizedBox(
         height: height,
         child: Row(
+          // Stretch so the coloured parts fill the bar's height.
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             for (var i = 0; i < shown.length; i++) ...[
               if (i > 0) const SizedBox(width: 3),

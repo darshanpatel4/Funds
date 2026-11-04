@@ -147,8 +147,8 @@ void main() {
       final st = loanStatus(rahul, entries, DateTime(2026, 11, 4));
       expect(st.given, 1000000);
       expect(st.principal, 1000000);
-      expect(st.interestDue, 22667); // ₹226.67
-      expect(st.total, 1022667);
+      expect(st.interestDue, 22700); // ₹227 (₹226.67 rounded)
+      expect(st.total, 1022700);
       expect(monthlyInterest(rahul, 1000000), 20000); // ₹200 a month
     });
 
@@ -156,8 +156,8 @@ void main() {
       final st = loanStatus(
           rahul, [e(EntryType.loanOut, 1000000, DateTime(2026, 10, 1))], DateTime(2026, 11, 4));
       final (interest, principal) = splitPayment(st, 200000); // ₹2,000 back
-      expect(interest, 22667);
-      expect(principal, 177333);
+      expect(interest, 22700);
+      expect(principal, 177300);
 
       final after = loanStatus(rahul, [
         e(EntryType.loanOut, 1000000, DateTime(2026, 10, 1)),
@@ -165,7 +165,7 @@ void main() {
         e(EntryType.loanIn, principal, DateTime(2026, 11, 4), created: 2),
       ], DateTime(2026, 11, 4));
       expect(after.interestDue, 0);
-      expect(after.principal, 822667);
+      expect(after.principal, 822700);
       expect(after.paidBack, 200000);
 
       // Interest then continues on the smaller amount.
@@ -174,7 +174,7 @@ void main() {
         e(EntryType.income, interest, DateTime(2026, 11, 4), created: 1),
         e(EntryType.loanIn, principal, DateTime(2026, 11, 4), created: 2),
       ], DateTime(2026, 12, 4));
-      expect(later.interestDue, 16453);
+      expect(later.interestDue, 16500); // ₹164.54 → ₹165
     });
 
     test('a payment above what is owed is capped', () {
@@ -217,7 +217,7 @@ void main() {
         );
 
     test('₹1,00,000 at 7.1% for 1 year, added every 3 months, gives ₹1,07,291', () {
-      expect((fdMaturityValue(fd()) - 10729128).abs() <= 2, isTrue);
+      expect(fdMaturityValue(fd()), 10729100); // ₹1,07,291
     });
 
     test('simple interest: ₹1,00,000 at 10% for 1 year gives ₹1,10,000', () {

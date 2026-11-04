@@ -958,7 +958,7 @@ class _WeekChart extends StatelessWidget {
     } else if (total == 0) {
       note = 'No spending in the last 7 days.';
     } else {
-      note = 'About ${m(total ~/ 7)} a day. Tap a day to see its entries.';
+      note = 'About ${m((total / 7 / 100).round() * 100)} a day. Tap a day to see its entries.';
     }
 
     return CardBox(
