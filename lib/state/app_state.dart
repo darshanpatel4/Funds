@@ -134,6 +134,59 @@ class AppState extends ChangeNotifier {
     return v == null ? null : DateTime.fromMillisecondsSinceEpoch(v);
   }
 
+  // ------------------------------------------------- automatic backup
+
+  bool get autoBackup => _flag('auto_backup', true);
+
+  /// 'daily', 'weekly' or 'monthly'.
+  String get autoBackupFrequency => _settings['auto_backup_freq'] ?? 'weekly';
+
+  int get autoBackupDays => switch (autoBackupFrequency) {
+        'daily' => 1,
+        'monthly' => 30,
+        _ => 7,
+      };
+
+  /// Password for protected backups, or null. Stays on this phone only.
+  String? get backupPassword {
+    final v = _settings['backup_password'];
+    return v == null || v.isEmpty ? null : v;
+  }
+
+  DateTime? get lastAutoBackup {
+    final v = int.tryParse(_settings['last_auto_backup'] ?? '');
+    return v == null ? null : DateTime.fromMillisecondsSinceEpoch(v);
+  }
+
+  String? get autoBackupError {
+    final v = _settings['auto_backup_error'];
+    return v == null || v.isEmpty ? null : v;
+  }
+
+  bool get autoBackupDue {
+    final last = lastAutoBackup;
+    if (last == null) return true;
+    return today().difference(dateOnly(last)).inDays >= autoBackupDays;
+  }
+
+  Future<void> setBackupPassword(String? password) =>
+      setSetting('backup_password', password ?? '');
+
+  // -------------------------------------------------------- reminders
+
+  bool get remindersOn => _flag('reminders_on', true);
+
+  /// One kind of reminder: bills, salary, card, lend, fd, budget, daily.
+  bool reminderOn(String kind) => _flag('rem_$kind', true);
+
+  /// Minutes after midnight for date reminders (default 9:00 AM).
+  int get reminderTime => int.tryParse(_settings['rem_time'] ?? '') ?? 9 * 60;
+
+  /// Minutes after midnight for the evening reminder (default 9:00 PM).
+  int get dailyReminderTime => int.tryParse(_settings['rem_daily_time'] ?? '') ?? 21 * 60;
+
+  bool get reminderAmounts => _flag('rem_amounts', false);
+
   Future<void> setSetting(String key, String value) async {
     await _db.db.insert('settings', {'key': key, 'value': value},
         conflictAlgorithm: _replace);
@@ -875,8 +928,20 @@ class AppState extends ChangeNotifier {
 
   static const backupFormat = 'funds-backup';
 
+  /// Settings that belong to this phone only and never go into a backup.
+  static const _deviceOnlySettings = {
+    'backup_password',
+    'last_auto_backup',
+    'auto_backup_error',
+    'notif_asked',
+  };
+
   Future<String> exportJson() async {
     final data = await _db.dump();
+    data['settings'] = [
+      for (final row in data['settings'] ?? const <Map<String, Object?>>[])
+        if (!_deviceOnlySettings.contains(row['key'])) row,
+    ];
     return const JsonEncoder.withIndent(' ').convert({
       'format': backupFormat,
       'version': 1,
@@ -929,7 +994,17 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> importBackup(Map<String, List<Map<String, Object?>>> data) async {
-    await _db.restore(data);
+    // Keep this phone's own backup password and backup history.
+    final keep = {
+      for (final k in _deviceOnlySettings)
+        if (_settings[k] != null) k: _settings[k]!,
+    };
+    final incoming = [
+      for (final row in data['settings'] ?? const <Map<String, Object?>>[])
+        if (!keep.containsKey(row['key'])) row,
+      for (final e in keep.entries) {'key': e.key, 'value': e.value},
+    ];
+    await _db.restore({...data, 'settings': incoming});
     await _load();
     amountsHidden = hideAmountsByDefault;
     await postDuePlans(notify: false);

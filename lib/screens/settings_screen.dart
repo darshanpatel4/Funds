@@ -2,12 +2,15 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../data/models.dart';
+import '../services/backup_service.dart';
+import '../services/reminders.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../utils/format.dart';
@@ -112,6 +115,15 @@ class SettingsScreen extends StatelessWidget {
                   onTap: () => _open(context, const SecuritySettingsScreen()),
                 ),
                 _MenuRow(
+                  icon: Icons.notifications_none_rounded,
+                  color: C.orange,
+                  title: 'Reminders',
+                  subtitle: s.remindersOn
+                      ? 'On · ${_reminderKinds.where((k) => s.reminderOn(k.$1)).length} kinds · ${_timeLabel(s.reminderTime)}'
+                      : 'Off',
+                  onTap: () => _open(context, const RemindersSettingsScreen()),
+                ),
+                _MenuRow(
                   icon: Icons.grid_view_rounded,
                   color: C.teal,
                   title: 'Features',
@@ -122,10 +134,11 @@ class SettingsScreen extends StatelessWidget {
                   icon: Icons.sync_rounded,
                   color: C.blue,
                   title: 'Backup & restore',
-                  subtitle: last == null
-                      ? 'Last backup: never'
-                      : 'Last backup: ${friendlyDay(last)}',
-                  attention: due,
+                  subtitle: [
+                    if (s.autoBackup) 'Automatic, ${s.autoBackupFrequency}',
+                    last == null ? 'Last backup: never' : 'Last: ${friendlyDay(last)}',
+                  ].join(' · '),
+                  attention: due || (s.autoBackup && s.autoBackupError != null),
                   onTap: () => _open(context, const BackupSettingsScreen()),
                 ),
                 _MenuRow(
@@ -410,88 +423,362 @@ class FeaturesSettingsScreen extends StatelessWidget {
 
 // ---------------------------------------------------------------- backup
 
-class BackupSettingsScreen extends StatelessWidget {
+String _timeLabel(int minutes) =>
+    DateFormat('h:mm a').format(DateTime(2000, 1, 1, minutes ~/ 60, minutes % 60));
+
+class BackupSettingsScreen extends StatefulWidget {
   const BackupSettingsScreen({super.key});
+
+  @override
+  State<BackupSettingsScreen> createState() => _BackupSettingsScreenState();
+}
+
+class _BackupSettingsScreenState extends State<BackupSettingsScreen> {
+  late Future<(bool, int)> _info = _loadInfo();
+  bool _busy = false;
+
+  /// (automatic backup possible on this phone, copies in Downloads/Funds)
+  Future<(bool, int)> _loadInfo() async {
+    final ok = await Downloads.supported();
+    var n = 0;
+    if (ok) {
+      try {
+        n = (await Downloads.list()).length;
+      } catch (_) {}
+    }
+    return (ok, n);
+  }
+
+  void _refresh() => setState(() => _info = _loadInfo());
 
   @override
   Widget build(BuildContext context) {
     final s = context.watch<AppState>();
-    final last = s.lastBackup;
-    final due = _backupDue(s);
-
-    return _SubPage(
-      title: 'Backup & restore',
-      children: [
-        Text(
-          'Everything stays on this phone. Before switching phones, export a backup and import it on the new one. Keep the backup file private; it is not encrypted.',
-          style: ts(13, color: C.muted, height: 1.5),
-        ),
-        const SizedBox(height: 12),
-        CardBox(
-          child: Column(
-            children: [
-              ListRow(
-                divider: true,
-                leading: const IconTile(Icons.upload_file_rounded, color: C.accent),
-                title: 'Export backup',
-                subtitle: 'Save a file to Drive, WhatsApp or Files',
-                trailing: const Icon(Icons.chevron_right_rounded, color: C.muted),
-                onTap: () => _export(context),
-              ),
-              ListRow(
-                leading: const IconTile(Icons.download_rounded, color: C.blue),
-                title: 'Import backup',
-                subtitle: 'Replace the data on this phone with a backup file',
-                trailing: const Icon(Icons.chevron_right_rounded, color: C.muted),
-                onTap: () => _import(context),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        Row(
+    return FutureBuilder<(bool, int)>(
+      future: _info,
+      builder: (context, snap) {
+        final supported = snap.data?.$1 ?? true;
+        final copies = snap.data?.$2 ?? 0;
+        return _SubPage(
+          title: 'Backup & restore',
           children: [
-            if (due) ...[
-              Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(color: C.yellow, shape: BoxShape.circle),
+            _status(s, copies),
+            const SizedBox(height: 24),
+            const SectionLabel('Automatic backup'),
+            if (!supported)
+              CardBox(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  'Automatic backup needs Android 10 or newer. Use "Share a backup" below instead.',
+                  style: ts(13, color: C.muted, height: 1.45),
+                ),
+              )
+            else
+              CardBox(
+                child: Column(
+                  children: [
+                    _SwitchRow(
+                      icon: Icons.autorenew_rounded,
+                      color: C.income,
+                      title: 'Back up automatically',
+                      subtitle: 'When you open Funds and a backup is due',
+                      value: s.autoBackup,
+                      divider: s.autoBackup,
+                      onChanged: (v) async {
+                        await s.setFlag('auto_backup', v);
+                        if (v) {
+                          await BackupService.autoBackupIfDue(s);
+                          _refresh();
+                        }
+                      },
+                    ),
+                    if (s.autoBackup) ...[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                        decoration: const BoxDecoration(
+                            border: Border(bottom: BorderSide(color: C.line))),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('How often',
+                                style: ts(13, weight: FontWeight.w700, color: C.muted)),
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                for (final (key, label) in const [
+                                  ('daily', 'Every day'),
+                                  ('weekly', 'Every week'),
+                                  ('monthly', 'Every month'),
+                                ])
+                                  FilterPill(label,
+                                      selected: s.autoBackupFrequency == key,
+                                      onTap: () => s.setSetting('auto_backup_freq', key)),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      ListRow(
+                        divider: true,
+                        leading: const IconTile(Icons.folder_outlined, color: C.yellow),
+                        title: 'Saved in',
+                        subtitle: 'Downloads/Funds. Stays even if the app is uninstalled.',
+                      ),
+                      ListRow(
+                        leading: const IconTile(Icons.layers_outlined, color: C.muted),
+                        title: 'Copies to keep',
+                        subtitle: 'Older copies are deleted',
+                        trailing: Text('Last ${BackupService.keepCopies}',
+                            style: ts(14, weight: FontWeight.w700, color: C.accent)),
+                      ),
+                    ],
+                  ],
+                ),
               ),
-              const SizedBox(width: 8),
-            ],
-            Expanded(
-              child: Text(
-                last == null
-                    ? 'No backup yet. Export one so you never lose your data.'
-                    : due
-                        ? 'Last backup: ${friendlyDay(last)}. It has been over a month; export a new one.'
-                        : 'Last backup: ${friendlyDay(last)}',
-                style: ts(13,
-                    weight: FontWeight.w600, color: due ? C.yellow : C.muted, height: 1.4),
+            const SizedBox(height: 24),
+            const SectionLabel('Protection'),
+            CardBox(
+              child: Column(
+                children: [
+                  _SwitchRow(
+                    icon: Icons.lock_outline_rounded,
+                    color: C.yellow,
+                    title: 'Password-protect backups',
+                    subtitle: s.backupPassword != null
+                        ? 'On: backups need your password to open'
+                        : 'Off: anyone with the file can read it',
+                    value: s.backupPassword != null,
+                    divider: s.backupPassword != null,
+                    onChanged: (v) => v ? _setPassword(context) : _removePassword(context),
+                  ),
+                  if (s.backupPassword != null) ...[
+                    ListRow(
+                      divider: true,
+                      leading: const IconTile(Icons.key_outlined, color: C.muted),
+                      title: 'Change password',
+                      trailing: const Icon(Icons.chevron_right_rounded, color: C.muted),
+                      onTap: () => _setPassword(context),
+                    ),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      color: const Color(0xFF1A1408),
+                      child: Text(
+                        'If you forget this password, the backups cannot be opened by anyone, including you.',
+                        style: ts(12, weight: FontWeight.w600, color: C.yellow, height: 1.45),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
+            const SizedBox(height: 24),
+            const SectionLabel('By hand'),
+            CardBox(
+              child: Column(
+                children: [
+                  if (supported)
+                    ListRow(
+                      divider: true,
+                      leading: const IconTile(Icons.save_alt_rounded, color: C.accent),
+                      title: 'Back up now',
+                      subtitle: 'Save a copy to Downloads/Funds',
+                      trailing: _busy
+                          ? const SizedBox(
+                              width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.chevron_right_rounded, color: C.muted),
+                      onTap: _busy ? null : () => _backupNow(context),
+                    ),
+                  ListRow(
+                    divider: true,
+                    leading: const IconTile(Icons.share_outlined, color: C.income),
+                    title: 'Share a backup',
+                    subtitle: 'Send to Google Drive, WhatsApp or email',
+                    trailing: const Icon(Icons.chevron_right_rounded, color: C.muted),
+                    onTap: () => _share(context),
+                  ),
+                  ListRow(
+                    leading: const IconTile(Icons.download_rounded, color: C.blue),
+                    title: 'Import backup',
+                    subtitle: 'Asks for the password if the file has one',
+                    trailing: const Icon(Icons.chevron_right_rounded, color: C.muted),
+                    onTap: () => _import(context),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Tip: if Google Drive or another app syncs your Downloads folder, your backups are also safe if the phone is lost.',
+              style: ts(12, color: C.muted, height: 1.5),
+            ),
           ],
-        ),
-      ],
+        );
+      },
     );
   }
 
-  Future<void> _export(BuildContext context) async {
+  Widget _status(AppState s, int copies) {
+    final last = s.lastAutoBackup ?? s.lastBackup;
+    final err = s.autoBackup ? s.autoBackupError : null;
+    final fresh = last != null &&
+        today().difference(dateOnly(last)).inDays <= (s.autoBackupDays > 7 ? s.autoBackupDays : 7);
+
+    String title;
+    String body;
+    Color bg;
+    Color border;
+    Color fg;
+    IconData icon;
+    if (err != null) {
+      title = 'Last automatic backup failed';
+      body = err;
+      bg = const Color(0xFF2A0E12);
+      border = const Color(0xFF5A1F26);
+      fg = C.expense;
+      icon = Icons.error_outline_rounded;
+    } else if (fresh) {
+      title = 'Your data is backed up';
+      body = 'Last backup: ${friendlyDay(last).toLowerCase() == 'today' ? 'today' : friendlyDay(last)}, '
+          '${DateFormat('h:mm a').format(last)}'
+          '${copies > 0 ? '\n$copies ${copies == 1 ? 'copy' : 'copies'} in Downloads/Funds' : ''}';
+      bg = const Color(0xFF0E2A1A);
+      border = const Color(0xFF1F5A36);
+      fg = C.income;
+      icon = Icons.verified_user_outlined;
+    } else {
+      title = 'Back up your data';
+      body = (last == null ? 'No backup yet.' : 'Last backup: ${friendlyDay(last)}.') +
+          (s.autoBackup
+              ? ' A new one is made the next time you open Funds.'
+              : ' Turn on automatic backup below.');
+      bg = const Color(0xFF1A1408);
+      border = const Color(0xFF4A3A12);
+      fg = C.yellow;
+      icon = Icons.warning_amber_rounded;
+    }
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: fg),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: ts(15, weight: FontWeight.w800)),
+                const SizedBox(height: 2),
+                Text(body, style: ts(13, color: C.muted, height: 1.45)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _backupNow(BuildContext context) async {
+    final s = context.read<AppState>();
+    setState(() => _busy = true);
+    try {
+      await BackupService.saveToDownloads(s);
+      if (context.mounted) toast(context, 'Backup saved to Downloads/Funds');
+    } catch (_) {
+      if (context.mounted) toast(context, 'Could not save the backup.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+      _refresh();
+    }
+  }
+
+  Future<void> _setPassword(BuildContext context) async {
+    final s = context.read<AppState>();
+    final a = TextEditingController();
+    final b = TextEditingController();
+    String? error;
+    final pw = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSt) => AlertDialog(
+          title: const Text('Backup password'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Needed to open your backups. It is kept only on this phone.',
+                  style: ts(13, color: C.muted, height: 1.45)),
+              const SizedBox(height: 14),
+              TextField(
+                controller: a,
+                obscureText: true,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: 'Password'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: b,
+                obscureText: true,
+                decoration: InputDecoration(labelText: 'Type it again', errorText: error),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            TextButton(
+              onPressed: () {
+                if (a.text.length < 4) {
+                  setSt(() => error = 'Use at least 4 characters');
+                } else if (a.text != b.text) {
+                  setSt(() => error = 'The two passwords are different');
+                } else {
+                  Navigator.pop(ctx, a.text);
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (pw == null) return;
+    await s.setBackupPassword(pw);
+    if (context.mounted) toast(context, 'New backups are password-protected');
+  }
+
+  Future<void> _removePassword(BuildContext context) async {
+    final ok = await confirm(
+      context,
+      title: 'Turn off the password?',
+      message: 'New backups can then be read by anyone who has the file. Older backups still need the old password.',
+      confirmLabel: 'Turn off',
+    );
+    if (ok && context.mounted) await context.read<AppState>().setBackupPassword(null);
+  }
+
+  Future<void> _share(BuildContext context) async {
     final s = context.read<AppState>();
     try {
-      final json = await s.exportJson();
+      final text = await BackupService.buildText(s);
       final dir = await getTemporaryDirectory();
-      // Remove older backup copies left in the app's cache.
       for (final f in dir.listSync().whereType<File>()) {
-        if (p.basename(f.path).startsWith('funds-backup-')) {
+        if (p.basename(f.path).startsWith(Downloads.prefix)) {
           try {
             f.deleteSync();
           } catch (_) {}
         }
       }
-      final name = 'funds-backup-${dayKey(DateTime.now())}.json';
+      final name = BackupService.fileName(DateTime.now());
       final file = File(p.join(dir.path, name));
-      await file.writeAsString(json, flush: true);
+      await file.writeAsString(text, flush: true);
 
       s.externalActivity = true;
       final result = await SharePlus.instance.share(ShareParams(
@@ -501,13 +788,34 @@ class BackupSettingsScreen extends StatelessWidget {
       ));
       if (result.status != ShareResultStatus.dismissed) {
         await s.markBackedUp();
-        if (context.mounted) toast(context, 'Backup exported');
+        if (context.mounted) toast(context, 'Backup shared');
       }
-    } catch (e) {
-      if (context.mounted) toast(context, 'Could not export the backup.');
+    } catch (_) {
+      if (context.mounted) toast(context, 'Could not share the backup.');
     } finally {
       s.externalActivity = false;
     }
+  }
+
+  Future<String?> _askPassword(BuildContext context) {
+    final c = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('This backup has a password'),
+        content: TextField(
+          controller: c,
+          obscureText: true,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Password'),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('Open')),
+        ],
+      ),
+    );
   }
 
   Future<void> _import(BuildContext context) async {
@@ -525,12 +833,13 @@ class BackupSettingsScreen extends StatelessWidget {
     } finally {
       s.externalActivity = false;
     }
-    if (picked == null || picked.path == null) return;
+    if (picked == null || picked.path == null || !context.mounted) return;
 
     Map<String, List<Map<String, Object?>>> data;
     try {
       final text = await File(picked.path!).readAsString();
-      data = AppState.parseBackup(text);
+      if (!context.mounted) return;
+      data = await BackupService.read(text, () => _askPassword(context));
     } on FormatException catch (e) {
       if (context.mounted) toast(context, e.message);
       return;
@@ -556,6 +865,192 @@ class BackupSettingsScreen extends StatelessWidget {
     } catch (_) {
       if (context.mounted) toast(context, 'Could not restore the backup. Your data was not changed.');
     }
+  }
+}
+
+// ------------------------------------------------------------- reminders
+
+const _reminderKinds = [
+  ('bills', Icons.receipt_long_outlined, C.blue, 'Bills, SIPs & EMIs', '1 day before they are taken'),
+  ('salary', Icons.work_outline_rounded, C.accent, 'Salary credited', 'On the day it is added'),
+  ('card', Icons.credit_card_rounded, C.pink, 'Credit card bill due', '3 days before the due date'),
+  ('lend', Icons.handshake_outlined, C.teal, 'Lend & borrow due dates', '1 day before and on the day'),
+  ('fd', Icons.lock_outline_rounded, C.yellow, 'FD maturity', '7 days before and on the day'),
+  ('budget', Icons.donut_large_rounded, C.orange, 'Budget almost used',
+      'When 80% and 100% of the monthly budget is spent'),
+  ('daily', Icons.add_circle_outline_rounded, C.muted, "Add today's spending",
+      'Every evening, if nothing was added'),
+];
+
+class RemindersSettingsScreen extends StatelessWidget {
+  const RemindersSettingsScreen({super.key});
+
+  Future<void> _pickTime(BuildContext context, String key, int current) async {
+    final t = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: current ~/ 60, minute: current % 60),
+    );
+    if (t != null && context.mounted) {
+      await context.read<AppState>().setSetting(key, '${t.hour * 60 + t.minute}');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = context.watch<AppState>();
+    final on = s.remindersOn;
+    return _SubPage(
+      title: 'Reminders',
+      children: [
+        CardBox(
+          child: _SwitchRow(
+            icon: Icons.notifications_none_rounded,
+            color: C.accent,
+            title: 'Allow reminders',
+            subtitle: 'Made on this phone. No internet needed.',
+            value: on,
+            onChanged: (v) async {
+              if (v) await Reminders.requestPermission();
+              await s.setFlag('reminders_on', v);
+            },
+          ),
+        ),
+        Opacity(
+          opacity: on ? 1 : 0.4,
+          child: IgnorePointer(
+            ignoring: !on,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 24),
+                const SectionLabel('Remind me about'),
+                CardBox(
+                  child: Column(
+                    children: [
+                      for (var i = 0; i < _reminderKinds.length; i++)
+                        _SwitchRow(
+                          icon: _reminderKinds[i].$2,
+                          color: _reminderKinds[i].$3,
+                          title: _reminderKinds[i].$4,
+                          subtitle: _reminderKinds[i].$5,
+                          value: s.reminderOn(_reminderKinds[i].$1),
+                          divider: i < _reminderKinds.length - 1,
+                          onChanged: (v) => s.setFlag('rem_${_reminderKinds[i].$1}', v),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const SectionLabel('Times'),
+                CardBox(
+                  child: Column(
+                    children: [
+                      ListRow(
+                        divider: true,
+                        leading: const IconTile(Icons.wb_sunny_outlined, color: C.yellow),
+                        title: 'Bills, dues and FDs',
+                        subtitle: 'Time for date reminders',
+                        trailing: Text(_timeLabel(s.reminderTime),
+                            style: ts(15, weight: FontWeight.w800, color: C.accent)),
+                        onTap: () => _pickTime(context, 'rem_time', s.reminderTime),
+                      ),
+                      ListRow(
+                        leading: const IconTile(Icons.nightlight_outlined, color: C.blue),
+                        title: 'Daily spending reminder',
+                        subtitle: 'Skipped on days you already added entries',
+                        trailing: Text(_timeLabel(s.dailyReminderTime),
+                            style: ts(15, weight: FontWeight.w800, color: C.accent)),
+                        onTap: () => _pickTime(context, 'rem_daily_time', s.dailyReminderTime),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const SectionLabel('Privacy'),
+                CardBox(
+                  child: _SwitchRow(
+                    icon: Icons.visibility_outlined,
+                    color: C.muted,
+                    title: 'Show amounts in reminders',
+                    subtitle: s.reminderAmounts
+                        ? 'On: "Netflix (₹649) is due tomorrow"'
+                        : 'Off: "Netflix is due tomorrow". Safer on the lock screen.',
+                    value: s.reminderAmounts,
+                    onChanged: (v) => s.setFlag('rem_amounts', v),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (on) ...[
+          const SizedBox(height: 24),
+          const SectionLabel('Timing'),
+          const CardBox(child: _ExactTimesRow()),
+        ],
+        const SizedBox(height: 14),
+        Text(
+          "If reminders don't appear, allow notifications for Funds in your phone's settings.",
+          style: ts(12, color: C.muted, height: 1.5),
+        ),
+      ],
+    );
+  }
+}
+
+/// Shows whether reminders come at the exact minute, with a button to allow
+/// it. Refreshes when you come back from Android's settings.
+class _ExactTimesRow extends StatefulWidget {
+  const _ExactTimesRow();
+
+  @override
+  State<_ExactTimesRow> createState() => _ExactTimesRowState();
+}
+
+class _ExactTimesRowState extends State<_ExactTimesRow> with WidgetsBindingObserver {
+  late Future<bool> _exact = Reminders.canExact();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      setState(() => _exact = Reminders.canExact());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<bool>(
+      future: _exact,
+      builder: (context, snap) {
+        final exact = snap.data ?? false;
+        return ListRow(
+          leading: IconTile(exact ? Icons.alarm_on_rounded : Icons.alarm_rounded,
+              color: exact ? C.income : C.yellow),
+          title: exact ? 'Exact times allowed' : 'Allow exact times',
+          subtitle: exact
+              ? 'Reminders come right on time.'
+              : 'Without this, Android may show reminders up to 1 hour late.',
+          trailing: exact
+              ? const Icon(Icons.check_circle_rounded, color: C.income)
+              : TintButton('Allow', onPressed: () async {
+                  await Reminders.requestExact();
+                  if (mounted) setState(() => _exact = Reminders.canExact());
+                }),
+        );
+      },
+    );
   }
 }
 

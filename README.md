@@ -22,7 +22,8 @@ All your data stays on your phone: no account, no cloud, no internet access.
 - **Fixed deposits:** worth today and at maturity (compounded quarterly, monthly, yearly or simple). At maturity you choose to withdraw or renew, with or without the interest.
 - **Savings goals.**
 - **Security:** fingerprint / face / phone PIN lock, and an option to hide amounts.
-- **Backup & restore:** export a file and import it on a new phone.
+- **Automatic backup:** every day, week or month into `Downloads/Funds` (kept even if the app is uninstalled), keeping the last 5 copies. Optional password protection (AES-256). You can also share a backup and import it on a new phone.
+- **Reminders:** phone notifications for bills, SIPs & EMIs, salary day, credit card dues, lend & borrow due dates, FD maturity, budget at 80% / 100%, and an evening "add today's spending" nudge. All scheduled on the phone; amounts are hidden by default.
 - **Feature switches:** turn off anything you don't use. Its data is kept.
 
 ## Screenshots
@@ -54,7 +55,7 @@ All your data stays on your phone: no account, no cloud, no internet access.
 
 ## Privacy
 
-Funds stores everything in a SQLite database on the phone. It makes no network requests, and Android cloud backup is turned off for the app. Moving to a new phone is done with your own backup file. The backup file is plain JSON and **not encrypted**, so keep it private.
+Funds stores everything in a SQLite database on the phone. It makes no network requests, and Android cloud backup is turned off for the app. Backups are files you control, saved in `Downloads/Funds` or shared by you. Turn on **password protection** so a backup file can't be read without your password. The password is kept only on the phone and is never written into a backup.
 
 ## Build and run
 
@@ -68,13 +69,6 @@ flutter build apk --release --split-per-abi  # APKs in build/app/outputs/flutter
 
 The release build is signed with the debug key. Before publishing to the Play Store, set up your own signing key: https://docs.flutter.dev/deployment/android#sign-the-app
 
-## Tests
-
-```bash
-flutter test
-```
-
-The tests cover money formatting, plan dates, lend & borrow interest, fixed deposit maturity values and backup parsing.
 ## Code layout
 
 | Path | What it holds |
@@ -87,6 +81,8 @@ The tests cover money formatting, plan dates, lend & borrow interest, fixed depo
 | `lib/data/lending.dart` | Lend & borrow interest and payment split |
 | `lib/data/deposits.dart` | Fixed deposit value and maturity |
 | `lib/state/app_state.dart` | All data in memory, balances, saving, automatic entries |
+| `lib/services/backup_service.dart` | Automatic backup, Downloads/Funds, password protection |
+| `lib/services/reminders.dart` | Scheduling reminder notifications |
 | `lib/screens/` | One file per screen |
 | `lib/widgets/` | Shared UI pieces |
 
