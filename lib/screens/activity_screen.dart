@@ -4,13 +4,16 @@ import 'package:provider/provider.dart';
 
 import '../data/categories.dart';
 import '../data/models.dart';
+import '../data/recurring.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import '../utils/format.dart';
 import '../widgets/ui.dart';
 import 'entry_form_screen.dart';
+import 'report_screen.dart';
+import 'tags_screen.dart';
 
-enum _View { byDay, byCategory }
+enum _View { byDay, byCategory, calendar }
 
 enum _Type { all, moneyOut, moneyIn, transfers }
 
@@ -29,6 +32,10 @@ class _ActivityScreenState extends State<ActivityScreen> {
   _Type _type = _Type.all;
   Set<int> _accounts = {};
   Set<String> _cats = {};
+  Set<int> _tagFilter = {};
+
+  /// Day picked on the calendar.
+  DateTime? _calDay;
   final _search = TextEditingController();
   bool _searching = false;
   final Set<DateTime> _open = {};
@@ -82,7 +89,12 @@ class _ActivityScreenState extends State<ActivityScreen> {
         _Type.transfers => e.type == EntryType.transfer,
       };
 
-  bool _filterOk(Entry e, Set<int> accounts, Set<String> cats) {
+  bool _filterOk(Entry e, Set<int> accounts, Set<String> cats, [Set<int>? tagSet]) {
+    final tags = tagSet ?? _tagFilter;
+    if (tags.isNotEmpty &&
+        !context.read<AppState>().tagsOf(e.id).any(tags.contains)) {
+      return false;
+    }
     if (accounts.isNotEmpty &&
         !accounts.contains(e.accountId) &&
         !accounts.contains(e.toAccountId)) {
@@ -117,24 +129,27 @@ class _ActivityScreenState extends State<ActivityScreen> {
       _open.clear();
       _full.clear();
       _autoOpened = false;
+      _calDay = null;
     });
   }
 
   Future<void> _openFilter(AppState s) async {
     final base = _base(s).where(_typeOk).toList();
-    final result = await showModalBottomSheet<(Set<int>, Set<String>)>(
+    final result = await showModalBottomSheet<(Set<int>, Set<String>, Set<int>)>(
       context: context,
       isScrollControlled: true,
       builder: (_) => _FilterSheet(
         accounts: _accounts,
         cats: _cats,
-        count: (a, c) => base.where((e) => _filterOk(e, a, c)).length,
+        tags: _tagFilter,
+        count: (a, c, t) => base.where((e) => _filterOk(e, a, c, t)).length,
       ),
     );
     if (result != null) {
       setState(() {
         _accounts = result.$1;
         _cats = result.$2;
+        _tagFilter = result.$3;
       });
     }
   }
@@ -173,7 +188,10 @@ class _ActivityScreenState extends State<ActivityScreen> {
     final canPrev = _month.isAfter(earliest);
     final canNext = _month.isBefore(latest);
 
-    final filterCount = _accounts.length + _cats.length;
+    // Filters on tags that were deleted are dropped.
+    _tagFilter.removeWhere((id) => s.tag(id) == null);
+    final filterCount = _accounts.length + _cats.length + _tagFilter.length;
+    final view = searching && _view == _View.calendar ? _View.byDay : _view;
 
     final showWeek = !searching && _month == thisMonth;
 
@@ -187,6 +205,17 @@ class _ActivityScreenState extends State<ActivityScreen> {
               Expanded(
                 child: Text('Activity',
                     style: ts(28, weight: FontWeight.w800, letterSpacing: -0.5)),
+              ),
+              if (s.feature(Features.tags))
+                IconButton(
+                  tooltip: 'Tags & trips',
+                  icon: const Icon(Icons.sell_outlined),
+                  onPressed: () => openTags(context),
+                ),
+              IconButton(
+                tooltip: 'Report for ${monthTitle(_month)}',
+                icon: const Icon(Icons.insights_rounded),
+                onPressed: () => openReport(context, _month),
               ),
               IconButton(
                 tooltip: _searching ? 'Close search' : 'Search',
@@ -240,7 +269,7 @@ class _ActivityScreenState extends State<ActivityScreen> {
             ],
           ),
           const SizedBox(height: 14),
-          _ViewToggle(value: _view, onChanged: (v) => setState(() => _view = v)),
+          _ViewToggle(value: view, onChanged: (v) => setState(() => _view = v)),
           const SizedBox(height: 14),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
@@ -273,14 +302,28 @@ class _ActivityScreenState extends State<ActivityScreen> {
                   for (final c in _cats)
                     _ActiveFilter(_catName(c),
                         onRemove: () => setState(() => _cats = {..._cats}..remove(c))),
+                  for (final t in _tagFilter)
+                    _ActiveFilter('#${s.tag(t)?.name ?? ''}',
+                        onRemove: () => setState(() => _tagFilter = {..._tagFilter}..remove(t))),
                 ],
               ),
             ),
           const SizedBox(height: 4),
-          if (_view == _View.byDay)
+          if (view == _View.byDay)
             ..._byDay(context, s, list)
-          else
-            ..._byCategory(list.where(counts).toList()),
+          else if (view == _View.byCategory)
+            ..._byCategory(list.where(counts).toList())
+          else ...[
+            const SizedBox(height: 10),
+            _CalendarView(
+              state: s,
+              month: _month,
+              entries: list,
+              counts: counts,
+              selected: _calDay,
+              onPick: (d) => setState(() => _calDay = d),
+            ),
+          ],
         ],
       ),
     );
@@ -424,7 +467,10 @@ class _ActivityScreenState extends State<ActivityScreen> {
       msg = 'No entries yet. Tap + on Home to add one.';
     } else if (_query.isNotEmpty) {
       msg = 'Nothing matches your search.';
-    } else if (_type != _Type.all || _accounts.isNotEmpty || _cats.isNotEmpty) {
+    } else if (_type != _Type.all ||
+        _accounts.isNotEmpty ||
+        _cats.isNotEmpty ||
+        _tagFilter.isNotEmpty) {
       msg = 'Nothing matches these filters in ${monthTitle(_month)}.';
     } else {
       msg = 'No entries in ${monthTitle(_month)}.';
@@ -534,7 +580,11 @@ class _ViewToggle extends StatelessWidget {
       ),
       child: Row(
         children: [
-          for (final (v, label) in const [(_View.byDay, 'By day'), (_View.byCategory, 'By category')])
+          for (final (v, label) in const [
+            (_View.byDay, 'By day'),
+            (_View.byCategory, 'By category'),
+            (_View.calendar, 'Calendar'),
+          ])
             Expanded(
               child: Semantics(
                 selected: value == v,
@@ -795,11 +845,17 @@ class _CategoryRow extends StatelessWidget {
 }
 
 class _FilterSheet extends StatefulWidget {
-  const _FilterSheet({required this.accounts, required this.cats, required this.count});
+  const _FilterSheet({
+    required this.accounts,
+    required this.cats,
+    required this.tags,
+    required this.count,
+  });
 
   final Set<int> accounts;
   final Set<String> cats;
-  final int Function(Set<int>, Set<String>) count;
+  final Set<int> tags;
+  final int Function(Set<int>, Set<String>, Set<int>) count;
 
   @override
   State<_FilterSheet> createState() => _FilterSheetState();
@@ -808,11 +864,12 @@ class _FilterSheet extends StatefulWidget {
 class _FilterSheetState extends State<_FilterSheet> {
   late Set<int> _a = {...widget.accounts};
   late Set<String> _c = {...widget.cats};
+  late Set<int> _t = {...widget.tags};
 
   @override
   Widget build(BuildContext context) {
     final s = context.read<AppState>();
-    final n = widget.count(_a, _c);
+    final n = widget.count(_a, _c, _t);
     final cats = [...expenseCats, ...systemCats, ...incomeCats];
 
     Widget chip(String label, bool on, VoidCallback onTap, {Color? dot}) => Semantics(
@@ -863,6 +920,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                     onPressed: () => setState(() {
                       _a = {};
                       _c = {};
+                      _t = {};
                     }),
                     child: Text('Clear all',
                         style: ts(14, weight: FontWeight.w700, color: C.accent)),
@@ -898,6 +956,20 @@ class _FilterSheetState extends State<_FilterSheet> {
                                 }), dot: c.color),
                         ],
                       ),
+                      if (s.feature(Features.tags) && s.tags.isNotEmpty) ...[
+                        const SizedBox(height: 20),
+                        const SectionLabel('Tags & trips'),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final t in s.tags)
+                              chip('#${t.name}', _t.contains(t.id), () => setState(() {
+                                    _t.contains(t.id) ? _t.remove(t.id) : _t.add(t.id!);
+                                  }), dot: tagColor(t.color)),
+                          ],
+                        ),
+                      ],
                       const SizedBox(height: 20),
                     ],
                   ),
@@ -905,7 +977,7 @@ class _FilterSheetState extends State<_FilterSheet> {
               ),
               PrimaryButton(
                 n == 0 ? 'No entries match' : 'Show $n ${n == 1 ? 'entry' : 'entries'}',
-                onPressed: n == 0 ? null : () => Navigator.pop(context, (_a, _c)),
+                onPressed: n == 0 ? null : () => Navigator.pop(context, (_a, _c, _t)),
               ),
             ],
           ),
@@ -1038,6 +1110,298 @@ class _WeekChart extends StatelessWidget {
           Text(note, style: ts(13, color: C.muted)),
         ],
       ),
+    );
+  }
+}
+
+/// One month as a calendar: what was spent each day (darker = heavier),
+/// plans due on coming days, and the picked day's entries below.
+class _CalendarView extends StatelessWidget {
+  const _CalendarView({
+    required this.state,
+    required this.month,
+    required this.entries,
+    required this.counts,
+    required this.selected,
+    required this.onPick,
+  });
+
+  final AppState state;
+  final DateTime month;
+  final List<Entry> entries;
+  final bool Function(Entry) counts;
+  final DateTime? selected;
+  final ValueChanged<DateTime> onPick;
+
+  static const _none = Color(0xFF0A0A0A);
+  static const _light = Color(0xFF3A1219);
+  static const _mid = Color(0xFF55171F);
+  static const _heavy = Color(0xFF7A1F2B);
+
+  String _short(int paise) {
+    if (state.amountsHidden) return '••';
+    final r = paise / 100;
+    if (r >= 100000) return '${(r / 100000).toStringAsFixed(1)}L';
+    if (r >= 1000) return '${(r / 1000).toStringAsFixed(1)}k';
+    return '${r.round()}';
+  }
+
+  /// Plans that will add an entry on [day] (a day after today).
+  List<Plan> _plansOn(DateTime day) {
+    final m = DateTime(day.year, day.month);
+    return [
+      for (final p in state.plans)
+        if (p.active &&
+            state.planVisible(p) &&
+            !isFinished(p) &&
+            !m.isBefore(nextMonthToPost(p)) &&
+            (p.tenure == null || monthsBetween(parseMonth(p.startMonth), m) < p.tenure!) &&
+            sameDay(dueDateIn(m.year, m.month, p.day), day))
+          p,
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = state;
+    final t = today();
+    final n = daysInMonth(month.year, month.month);
+    final lead = DateTime(month.year, month.month, 1).weekday % 7; // Sunday first
+
+    final spent = <int, int>{};
+    final income = <int>{};
+    final byDay = <int, List<Entry>>{};
+    for (final e in entries) {
+      byDay.putIfAbsent(e.date.day, () => []).add(e);
+      if (!counts(e)) continue;
+      if (e.type == EntryType.expense) spent[e.date.day] = (spent[e.date.day] ?? 0) + e.amount;
+      if (e.type == EntryType.income) income.add(e.date.day);
+    }
+    final trips = s.feature(Features.tags) ? s.tags.where((x) => x.hasDates).toList() : <Tag>[];
+
+    // What a normal day is: the budget per day, or this month's average.
+    final budget = s.feature(Features.budgets) ? s.overallBudget : null;
+    final double normal = budget != null
+        ? budget / n
+        : (spent.isEmpty ? 0 : spent.values.fold(0, (a, b) => a + b) / spent.length);
+    Color heat(int v) {
+      if (v <= 0) return _none;
+      if (normal <= 0 || v <= normal) return _light;
+      return v <= normal * 2 ? _mid : _heavy;
+    }
+
+    final isThisMonth = month.year == t.year && month.month == t.month;
+    var pick = selected;
+    if (pick == null || pick.year != month.year || pick.month != month.month) {
+      if (isThisMonth) {
+        pick = t;
+      } else {
+        final last = byDay.keys.isEmpty ? 1 : byDay.keys.reduce((a, b) => a > b ? a : b);
+        pick = DateTime(month.year, month.month, last);
+      }
+    }
+    final picked = pick;
+
+    final cells = <Widget>[];
+    for (var i = 0; i < lead; i++) {
+      cells.add(const SizedBox.shrink());
+    }
+    for (var d = 1; d <= n; d++) {
+      final day = DateTime(month.year, month.month, d);
+      final future = day.isAfter(t);
+      final v = spent[d] ?? 0;
+      final dots = <Color>[
+        if (trips.any((x) => x.covers(day))) C.yellow,
+        if (income.contains(d)) C.income,
+        if (future)
+          for (final p in _plansOn(day)) p.kind.isIncome ? C.income : C.accent,
+      ];
+      final isPick = sameDay(day, picked);
+      final isToday = sameDay(day, t);
+      cells.add(Semantics(
+        button: true,
+        selected: isPick,
+        label: '${DateFormat('EEEE d MMMM').format(day)}'
+            '${future ? '' : ', spent ${s.amountsHidden ? 'hidden' : money(v)}'}',
+        excludeSemantics: true,
+        child: Material(
+          color: future ? Colors.transparent : heat(v),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: BorderSide(
+              color: isPick ? C.text : (isToday ? C.accent : Colors.transparent),
+              width: 2,
+            ),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () => onPick(day),
+            child: Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Column(
+                children: [
+                  Text('$d',
+                      style: ts(13,
+                          weight: isToday ? FontWeight.w800 : FontWeight.w700,
+                          color: future ? C.faint : C.text)),
+                  Text(
+                    future ? '' : (v > 0 ? _short(v) : '0'),
+                    maxLines: 1,
+                    style: ts(10,
+                        weight: FontWeight.w800,
+                        color: v > 0 ? const Color(0xFFFFD6DB) : C.income),
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      for (final c in dots.take(3))
+                        Container(
+                          width: 5,
+                          height: 5,
+                          margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                          decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ));
+    }
+
+    Widget legend(Widget mark, String text) => Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            mark,
+            const SizedBox(width: 5),
+            Text(text, style: ts(11, weight: FontWeight.w700, color: C.muted)),
+          ],
+        );
+    Widget box(Color c) => Container(
+        width: 12, height: 12, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(4)));
+    Widget dot(Color c) =>
+        Container(width: 6, height: 6, decoration: BoxDecoration(color: c, shape: BoxShape.circle));
+
+    final pickFuture = picked.isAfter(t);
+    final dayEntries = byDay[picked.day] ?? const <Entry>[];
+    final plansDue = pickFuture ? _plansOn(picked) : const <Plan>[];
+    final daySpent = spent[picked.day] ?? 0;
+    final title = '${sameDay(picked, t) ? 'Today · ' : ''}${DateFormat('EEE d MMM').format(picked)}';
+    final dayTrips = trips.where((x) => x.covers(picked)).map((x) => x.name).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        CardBox(
+          padding: const EdgeInsets.fromLTRB(10, 14, 10, 12),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  for (final w in const ['S', 'M', 'T', 'W', 'T', 'F', 'S'])
+                    Expanded(
+                      child: Text(w,
+                          textAlign: TextAlign.center,
+                          style: ts(11, weight: FontWeight.w800, color: C.faint)),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              GridView.count(
+                crossAxisCount: 7,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                mainAxisSpacing: 4,
+                crossAxisSpacing: 4,
+                childAspectRatio: 0.82,
+                children: cells,
+              ),
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Wrap(
+                  spacing: 14,
+                  runSpacing: 6,
+                  children: [
+                    legend(box(_light), budget != null ? 'Within daily budget' : 'Light day'),
+                    legend(box(_heavy), 'Heavy day'),
+                    legend(dot(C.accent), 'Plan due'),
+                    legend(dot(C.income), 'Money in'),
+                    if (trips.isNotEmpty) legend(dot(C.yellow), 'Trip'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        CardBox(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: ts(15, weight: FontWeight.w800)),
+                          const SizedBox(height: 2),
+                          Text(
+                            pickFuture
+                                ? (plansDue.isEmpty ? 'Nothing planned' : 'Coming up')
+                                : [
+                                    dayEntries.isEmpty
+                                        ? 'No entries'
+                                        : '${dayEntries.length} ${dayEntries.length == 1 ? 'entry' : 'entries'}',
+                                    ...dayTrips,
+                                  ].join(' · '),
+                            style: ts(12, weight: FontWeight.w600, color: C.muted),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (!pickFuture)
+                      Money(-daySpent, colorBySign: true, color: daySpent == 0 ? C.income : null),
+                  ],
+                ),
+              ),
+              if (!pickFuture && dayEntries.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                  child: Text('No spending this day.', style: ts(13, color: C.muted)),
+                ),
+              for (final e in dayEntries)
+                DecoratedBox(
+                  decoration: const BoxDecoration(border: Border(top: BorderSide(color: C.line))),
+                  child: EntryRow(e, onTap: () => openEntryForm(context, entry: e)),
+                ),
+              for (final p in plansDue)
+                DecoratedBox(
+                  decoration: const BoxDecoration(border: Border(top: BorderSide(color: C.line))),
+                  child: ListRow(
+                    leading: IconTile(planLook(p.kind).$1, color: planLook(p.kind).$2),
+                    title: p.name,
+                    subtitle: 'Plan · ${s.accountName(p.accountId)}',
+                    trailing: Money(p.kind.isIncome ? p.amount : -p.amount,
+                        plus: true, colorBySign: true),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 14),
+          child: Text('Tap any day. Coming days show plans that are due.',
+              textAlign: TextAlign.center,
+              style: ts(12, weight: FontWeight.w600, color: C.muted)),
+        ),
+      ],
     );
   }
 }

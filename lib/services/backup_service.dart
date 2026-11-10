@@ -112,6 +112,11 @@ class Downloads {
   static Future<void> save(String name, String text) =>
       _channel.invokeMethod<String>('save', {'name': name, 'bytes': utf8.encode(text)});
 
+  /// Saves any file (a PDF or Excel report) to Downloads/Funds.
+  static Future<void> saveFile(String name, List<int> bytes, String mime) =>
+      _channel.invokeMethod<String>(
+          'save', {'name': name, 'bytes': Uint8List.fromList(bytes), 'mime': mime});
+
   /// This app's backups, newest first.
   static Future<List<SavedBackup>> list() async {
     final rows = await _channel.invokeListMethod<Map>('list', {'prefix': prefix}) ?? const [];

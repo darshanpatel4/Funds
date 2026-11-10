@@ -535,6 +535,72 @@ class Budget {
       );
 }
 
+/// A label that groups entries from any account or month. A trip also has
+/// dates (and maybe a budget); while it is on, new entries get it by
+/// themselves when [auto] is set.
+class Tag {
+  final int? id;
+  final String name;
+  final bool isTrip;
+
+  /// Index into the tag colours.
+  final int color;
+  final DateTime? start;
+  final DateTime? end;
+
+  /// Trip budget in paise, or null.
+  final int? budget;
+  final bool auto;
+  final int createdAt;
+
+  const Tag({
+    this.id,
+    required this.name,
+    this.isTrip = false,
+    this.color = 0,
+    this.start,
+    this.end,
+    this.budget,
+    this.auto = true,
+    required this.createdAt,
+  });
+
+  bool get hasDates => isTrip && start != null && end != null;
+
+  /// Whether [day] falls inside the trip's dates.
+  bool covers(DateTime day) {
+    if (!hasDates) return false;
+    final d = dateOnly(day);
+    return !d.isBefore(start!) && !d.isAfter(end!);
+  }
+
+  int get days => hasDates ? end!.difference(start!).inDays + 1 : 0;
+
+  Map<String, Object?> toMap() => {
+        'id': id,
+        'name': name,
+        'kind': isTrip ? 'trip' : 'tag',
+        'color': color,
+        'start_date': start == null ? null : dayKey(start!),
+        'end_date': end == null ? null : dayKey(end!),
+        'budget': budget,
+        'auto': auto ? 1 : 0,
+        'created_at': createdAt,
+      };
+
+  factory Tag.fromMap(Map<String, Object?> m) => Tag(
+        id: m['id'] as int?,
+        name: m['name'] as String,
+        isTrip: m['kind'] == 'trip',
+        color: (m['color'] as int?) ?? 0,
+        start: m['start_date'] == null ? null : parseDay(m['start_date'] as String),
+        end: m['end_date'] == null ? null : parseDay(m['end_date'] as String),
+        budget: m['budget'] as int?,
+        auto: (m['auto'] as int?) != 0,
+        createdAt: (m['created_at'] as int?) ?? 0,
+      );
+}
+
 /// Keys for the feature switches in Settings.
 class Features {
   Features._();
@@ -547,6 +613,7 @@ class Features {
   static const goals = 'feature_goals';
   static const lend = 'feature_lend';
   static const fds = 'feature_fds';
+  static const tags = 'feature_tags';
 
-  static const all = [salary, sips, bills, loans, cards, budgets, goals, lend, fds];
+  static const all = [salary, sips, bills, loans, cards, budgets, goals, lend, fds, tags];
 }

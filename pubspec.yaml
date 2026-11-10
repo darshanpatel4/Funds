@@ -46,6 +46,7 @@ dependencies:
   timezone: ^0.11.2
   flutter_timezone: ^5.1.1
   cryptography: ^2.9.0
+  pdf: ^3.12.0
 
 dev_dependencies:
   flutter_test:
@@ -68,6 +69,10 @@ flutter:
     - family: Manrope
       fonts:
         - asset: assets/fonts/Manrope.ttf
+
+  # Fixed-weight copies of Manrope used inside PDF reports.
+  assets:
+    - assets/fonts/pdf/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

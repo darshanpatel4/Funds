@@ -292,6 +292,30 @@ class Reminders {
       }
     }
 
+    // Monthly report: on the 1st, about the month before.
+    if (s.reminderOn('report')) {
+      final thisMonth = DateTime(t.year, t.month);
+      for (final first in [thisMonth, addMonths(thisMonth, 1)]) {
+        final month = addMonths(first, -1);
+        final spent = s.expenseInMonth(month);
+        final before = s.expenseInMonth(addMonths(month, -1));
+        final name = DateFormat('MMMM').format(month);
+        String body = 'Tap to see how $name went.';
+        if (amounts && spent > 0) {
+          body = 'You spent ${m(spent)}';
+          if (before > 0) {
+            final c = ((spent - before) * 100 / before).round();
+            final prev = DateFormat('MMMM').format(addMonths(month, -1));
+            body += c == 0 ? ', same as $prev.' : ', ${c.abs()}% ${c < 0 ? 'less' : 'more'} than $prev.';
+          } else {
+            body += '.';
+          }
+        }
+        add(at(first, s.reminderTime), 'Your $name report is ready', body,
+            'report:${monthKey(month)}');
+      }
+    }
+
     // Evening reminder, only on days with nothing added.
     if (s.reminderOn('daily')) {
       final addedToday = s.entries.any((e) => sameDay(e.date, t) && e.planId == null);

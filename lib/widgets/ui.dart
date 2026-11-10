@@ -443,6 +443,8 @@ class ProgressBar extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
         child: SizedBox(
           height: height,
+          // Full width, so the bar is never centred inside a Column.
+          width: double.infinity,
           child: Stack(
             children: [
               const Positioned.fill(child: ColoredBox(color: C.surface2)),

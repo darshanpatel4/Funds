@@ -10,6 +10,7 @@ import '../widgets/ui.dart';
 import 'account_form_screen.dart';
 import 'fd_screen.dart';
 import 'lend_screen.dart';
+import 'tags_screen.dart';
 
 /// Opens the add/edit entry screen.
 Future<void> openEntryForm(
@@ -18,6 +19,8 @@ Future<void> openEntryForm(
   EntryType? type,
   int? accountId,
   int? toAccountId,
+  Set<int>? tagIds,
+  DateTime? date,
 }) {
   // Lend & borrow entries are managed on the person's page.
   final loanId = entry?.loanId;
@@ -37,6 +40,8 @@ Future<void> openEntryForm(
       initialType: type,
       initialAccountId: accountId,
       initialToAccountId: toAccountId,
+      initialTags: tagIds,
+      initialDate: date,
     ),
   ));
 }
@@ -48,12 +53,16 @@ class EntryFormScreen extends StatefulWidget {
     this.initialType,
     this.initialAccountId,
     this.initialToAccountId,
+    this.initialTags,
+    this.initialDate,
   });
 
   final Entry? entry;
   final EntryType? initialType;
   final int? initialAccountId;
   final int? initialToAccountId;
+  final Set<int>? initialTags;
+  final DateTime? initialDate;
 
   @override
   State<EntryFormScreen> createState() => _EntryFormScreenState();
@@ -69,6 +78,13 @@ class _EntryFormScreenState extends State<EntryFormScreen> {
   late DateTime _date;
   String? _error;
   bool _saving = false;
+
+  /// Tags picked for this entry.
+  Set<int> _tags = {};
+
+  /// Trip tags the user removed by hand (not added back when the date
+  /// changes).
+  final Set<int> _removedAuto = {};
 
   bool get _editing => widget.entry != null;
 
@@ -87,11 +103,14 @@ class _EntryFormScreenState extends State<EntryFormScreen> {
       _date = e.date;
       _amount.text = amountInput(e.amount);
       _note.text = e.note;
+      _tags = {...s.tagsOf(e.id)};
       return;
     }
     _type = widget.initialType ?? EntryType.expense;
     _category = _defaultCat(_type);
-    _date = today();
+    _date = widget.initialDate == null ? today() : dateOnly(widget.initialDate!);
+    _tags = {...?widget.initialTags};
+    if (s.feature(Features.tags)) _tags.addAll(s.autoTripsOn(_date));
     _toAccountId = widget.initialToAccountId;
 
     final visible = s.visibleAccounts;
@@ -131,7 +150,70 @@ class _EntryFormScreenState extends State<EntryFormScreen> {
       firstDate: DateTime(2000),
       lastDate: DateTime(now.year + 5, 12, 31),
     );
-    if (d != null) setState(() => _date = dateOnly(d));
+    if (d == null) return;
+    setState(() {
+      final s = context.read<AppState>();
+      // A new entry follows the trips of its new date.
+      if (!_editing && s.feature(Features.tags)) {
+        _tags.removeAll(s.autoTripsOn(_date).difference(widget.initialTags ?? const {}));
+        _tags.addAll(s.autoTripsOn(dateOnly(d)).difference(_removedAuto));
+      }
+      _date = dateOnly(d);
+    });
+  }
+
+  bool get _canTag => _type == EntryType.expense || _type == EntryType.income;
+
+  List<Widget> _tagsRow(AppState s) {
+    if (!s.feature(Features.tags) || !_canTag) return const [];
+    // Plain tags, trips around this date, and anything already picked.
+    final shown = s.tags
+        .where((t) => !t.isTrip || t.covers(_date) || _tags.contains(t.id))
+        .toList()
+      ..sort((a, b) {
+        if (a.isTrip != b.isTrip) return a.isTrip ? -1 : 1;
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      });
+    return [
+      const SizedBox(height: 16),
+      const SectionLabel('Tags'),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final t in shown)
+            _TagChip(
+              label: '#${t.name}',
+              color: tagColor(t.color),
+              selected: _tags.contains(t.id),
+              onTap: () => setState(() {
+                if (_tags.remove(t.id)) {
+                  _removedAuto.add(t.id!);
+                } else {
+                  _tags.add(t.id!);
+                  _removedAuto.remove(t.id);
+                }
+              }),
+            ),
+          _TagChip(
+            label: '+ New',
+            color: C.accent,
+            selected: false,
+            dashed: true,
+            onTap: () async {
+              final id = await quickNewTag(context);
+              if (id != null) setState(() => _tags.add(id));
+            },
+          ),
+        ],
+      ),
+      if (s.tags.isEmpty)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text('Group entries, like a trip or office claims, and see their total.',
+              style: ts(12, color: C.muted)),
+        ),
+    ];
   }
 
   Future<void> _save() async {
@@ -162,7 +244,10 @@ class _EntryFormScreenState extends State<EntryFormScreen> {
           date: _date,
           createdAt: old?.createdAt ?? DateTime.now().millisecondsSinceEpoch,
           planId: old?.planId,
-        ));
+        ),
+        tagIds: context.read<AppState>().feature(Features.tags)
+            ? (_canTag ? _tags : <int>{})
+            : null);
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -371,6 +456,7 @@ class _EntryFormScreenState extends State<EntryFormScreen> {
                             ),
                           ],
                         ),
+                        ..._tagsRow(s),
                       ],
                     ),
                   ),
@@ -484,6 +570,52 @@ class _CategoryGrid extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _TagChip extends StatelessWidget {
+  const _TagChip({
+    required this.label,
+    required this.color,
+    required this.selected,
+    required this.onTap,
+    this.dashed = false,
+  });
+
+  final String label;
+  final Color color;
+  final bool selected;
+  final bool dashed;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      selected: selected,
+      button: true,
+      child: Material(
+        color: selected ? Color.alphaBlend(color.withValues(alpha: 0.16), C.bg) : Colors.transparent,
+        shape: StadiumBorder(
+          side: BorderSide(color: selected ? color : (dashed ? C.dashed : C.border), width: 1.5),
+        ),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onTap,
+          child: Container(
+            height: 36,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            // widthFactor 1 keeps the chip as wide as its text.
+            child: Align(
+              widthFactor: 1,
+              child: Text(label,
+                  style: ts(13,
+                      weight: FontWeight.w800,
+                      color: selected ? color : (dashed ? C.accent : C.text))),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

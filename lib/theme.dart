@@ -34,7 +34,13 @@ class C {
   static const yellow = Color(0xFFF0C674);
   static const pink = Color(0xFFF08BD0);
   static const teal = Color(0xFF7FE0D0);
+  static const purple = Color(0xFFC9A7FF);
 }
+
+/// Colours a tag or trip can have (stored as an index).
+const tagColors = [C.yellow, C.transfer, C.pink, C.teal, C.purple, C.orange];
+
+Color tagColor(int i) => tagColors[i.clamp(0, tagColors.length - 1)];
 
 const _tabular = [FontFeature.tabularFigures()];
 

@@ -55,6 +55,8 @@ const _features = [
       'Money you lent to or borrowed from people'),
   (Features.fds, Icons.lock_outline_rounded, C.yellow, 'Fixed deposits',
       'FD value today, maturity amount, withdraw or renew'),
+  (Features.tags, Icons.sell_outlined, C.purple, 'Tags & trips',
+      'Group entries like a trip or a wedding and see the total'),
 ];
 
 /// True when there is no backup yet or the last one is over 30 days old.
@@ -878,6 +880,8 @@ const _reminderKinds = [
   ('fd', Icons.lock_outline_rounded, C.yellow, 'FD maturity', '7 days before and on the day'),
   ('budget', Icons.donut_large_rounded, C.orange, 'Budget almost used',
       'When 80% and 100% of the monthly budget is spent'),
+  ('report', Icons.insights_rounded, C.accent, 'Monthly report',
+      'On the 1st: how last month went'),
   ('daily', Icons.add_circle_outline_rounded, C.muted, "Add today's spending",
       'Every evening, if nothing was added'),
 ];

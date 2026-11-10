@@ -9,7 +9,28 @@ class FundsDb {
 
   static const tables = [
     'accounts', 'entries', 'plans', 'goals', 'budgets', 'settings', 'people', 'loans', 'fds',
+    'tags', 'entry_tags',
   ];
+
+  static const _tagsTable = '''
+    CREATE TABLE tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'tag',
+      color INTEGER NOT NULL DEFAULT 0,
+      start_date TEXT,
+      end_date TEXT,
+      budget INTEGER,
+      auto INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL
+    )''';
+
+  static const _entryTagsTable = '''
+    CREATE TABLE entry_tags (
+      entry_id INTEGER NOT NULL,
+      tag_id INTEGER NOT NULL,
+      PRIMARY KEY (entry_id, tag_id)
+    )''';
 
   static const _fdsTable = '''
     CREATE TABLE fds (
@@ -54,7 +75,7 @@ class FundsDb {
     final dir = await getDatabasesPath();
     final db = await openDatabase(
       p.join(dir, 'funds.db'),
-      version: 4,
+      version: 5,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // v2: accounts can be left out of the total balance.
@@ -71,6 +92,11 @@ class FundsDb {
           // v4: fixed deposits.
           await db.execute(_fdsTable);
           await db.execute('ALTER TABLE entries ADD COLUMN fd_id INTEGER');
+        }
+        if (oldVersion < 5) {
+          // v5: tags & trips.
+          await db.execute(_tagsTable);
+          await db.execute(_entryTagsTable);
         }
       },
       onCreate: (db, version) async {
@@ -105,6 +131,8 @@ class FundsDb {
         b.execute(_peopleTable);
         b.execute(_loansTable);
         b.execute(_fdsTable);
+        b.execute(_tagsTable);
+        b.execute(_entryTagsTable);
         b.execute('CREATE INDEX entries_date ON entries(date)');
         b.execute('CREATE INDEX entries_account ON entries(account_id)');
         b.execute('''

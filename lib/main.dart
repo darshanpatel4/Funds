@@ -9,11 +9,13 @@ import 'screens/entry_form_screen.dart';
 import 'screens/fd_screen.dart';
 import 'screens/lend_screen.dart';
 import 'screens/lock_screen.dart';
+import 'screens/report_screen.dart';
 import 'screens/shell.dart';
 import 'services/backup_service.dart';
 import 'services/reminders.dart';
 import 'state/app_state.dart';
 import 'theme.dart';
+import 'utils/format.dart';
 
 /// Lets reminders open pages from outside the widget tree.
 final navigatorKey = GlobalKey<NavigatorState>();
@@ -110,6 +112,9 @@ class _FundsAppState extends State<FundsApp> with WidgetsBindingObserver {
         if (id != null) openPerson(context, id);
       case 'fd':
         if (id != null) openFd(context, id);
+      case 'report':
+        currentTab.value = Tabs.home;
+        if (parts.length > 1) openReport(context, parseMonth(parts[1]));
       default:
         currentTab.value = Tabs.home;
     }

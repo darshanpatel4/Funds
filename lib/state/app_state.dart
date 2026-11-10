@@ -29,6 +29,18 @@ class Upcoming {
   });
 }
 
+/// One piece of net worth, e.g. "Bank accounts ₹2,48,600". Negative
+/// amounts are owed.
+class WorthPart {
+  /// bank, cash, wallet, card, fd, lent or borrowed.
+  final String kind;
+  final String label;
+  final String subtitle;
+  final int amount;
+
+  const WorthPart(this.kind, this.label, this.subtitle, this.amount);
+}
+
 /// Holds all data in memory (a personal ledger is small) and writes every
 /// change straight to the on-phone database.
 class AppState extends ChangeNotifier {
@@ -44,6 +56,9 @@ class AppState extends ChangeNotifier {
   List<Person> people = [];
   List<Loan> loans = [];
   List<Fd> fds = [];
+  List<Tag> tags = [];
+  Map<int, Set<int>> _entryTags = {};
+  Map<int, List<Entry>> _tagEntries = {};
   Map<int, List<Entry>> _loanEntries = {};
   Map<String, String> _settings = {};
   Map<int, int> _balances = {};
@@ -81,6 +96,16 @@ class AppState extends ChangeNotifier {
         .toList();
     loans = (await db.query('loans', orderBy: 'id')).map(Loan.fromMap).toList();
     fds = (await db.query('fds', orderBy: 'maturity_date, id')).map(Fd.fromMap).toList();
+    // Links to entries that were deleted (with their account, person...).
+    await db.execute(
+        'DELETE FROM entry_tags WHERE entry_id NOT IN (SELECT id FROM entries) '
+        'OR tag_id NOT IN (SELECT id FROM tags)');
+    tags = (await db.query('tags', orderBy: 'id DESC')).map(Tag.fromMap).toList();
+    final links = <int, Set<int>>{};
+    for (final r in await db.query('entry_tags')) {
+      links.putIfAbsent(r['entry_id'] as int, () => {}).add(r['tag_id'] as int);
+    }
+    _entryTags = links;
     _settings = {
       for (final r in await db.query('settings')) r['key'] as String: r['value'] as String,
     };
@@ -106,6 +131,14 @@ class AppState extends ChangeNotifier {
       if (id != null) byLoan.putIfAbsent(id, () => []).add(e);
     }
     _loanEntries = byLoan;
+
+    final byTag = <int, List<Entry>>{};
+    for (final e in entries) {
+      for (final t in _entryTags[e.id] ?? const <int>{}) {
+        byTag.putIfAbsent(t, () => []).add(e);
+      }
+    }
+    _tagEntries = byTag;
   }
 
   Future<void> _reload() async {
@@ -272,21 +305,37 @@ class AppState extends ChangeNotifier {
 
   // ------------------------------------------------------------- entries
 
-  Future<void> saveEntry(Entry e) async {
+  /// Saves an entry. When [tagIds] is given, the entry gets exactly those
+  /// tags.
+  Future<void> saveEntry(Entry e, {Set<int>? tagIds}) async {
     final map = e.toMap();
-    if (e.id == null) {
-      map.remove('id');
-      await _db.db.insert('entries', map);
-    } else {
-      await _db.db.update('entries', map, where: 'id = ?', whereArgs: [e.id]);
-    }
-    await _db.db.insert('settings', {'key': 'last_account', 'value': '${e.accountId}'},
-        conflictAlgorithm: _replace);
+    await _db.db.transaction((txn) async {
+      int id;
+      if (e.id == null) {
+        map.remove('id');
+        id = await txn.insert('entries', map);
+      } else {
+        id = e.id!;
+        await txn.update('entries', map, where: 'id = ?', whereArgs: [id]);
+      }
+      if (tagIds != null) {
+        await txn.delete('entry_tags', where: 'entry_id = ?', whereArgs: [id]);
+        for (final t in tagIds) {
+          await txn.insert('entry_tags', {'entry_id': id, 'tag_id': t},
+              conflictAlgorithm: _replace);
+        }
+      }
+      await txn.insert('settings', {'key': 'last_account', 'value': '${e.accountId}'},
+          conflictAlgorithm: _replace);
+    });
     await _reload();
   }
 
   Future<void> deleteEntry(int id) async {
-    await _db.db.delete('entries', where: 'id = ?', whereArgs: [id]);
+    await _db.db.transaction((txn) async {
+      await txn.delete('entry_tags', where: 'entry_id = ?', whereArgs: [id]);
+      await txn.delete('entries', where: 'id = ?', whereArgs: [id]);
+    });
     await _reload();
   }
 
@@ -924,6 +973,208 @@ class AppState extends ChangeNotifier {
     await _reload();
   }
 
+  // ------------------------------------------------------- tags & trips
+
+  Tag? tag(int? id) {
+    for (final t in tags) {
+      if (t.id == id) return t;
+    }
+    return null;
+  }
+
+  /// Tag ids of one entry.
+  Set<int> tagsOf(int? entryId) => _entryTags[entryId] ?? const {};
+
+  /// Entries with this tag, newest first.
+  List<Entry> entriesWithTag(int tagId) => _tagEntries[tagId] ?? const [];
+
+  /// Trips that tag new entries on [day] by themselves.
+  Set<int> autoTripsOn(DateTime day) => {
+        for (final t in tags)
+          if (t.isTrip && t.auto && t.covers(day)) t.id!,
+      };
+
+  /// The trip going on today, if any.
+  Tag? get tripOnNow {
+    final t = today();
+    for (final x in tags) {
+      if (x.covers(t)) return x;
+    }
+    return null;
+  }
+
+  /// What was spent with this tag (all accounts).
+  int tagSpent(int tagId) => entriesWithTag(tagId)
+      .where((e) => e.type == EntryType.expense)
+      .fold(0, (s, e) => s + e.amount);
+
+  /// Entries that could be tagged: normal spending and income, not added
+  /// by a plan.
+  static bool taggable(Entry e) =>
+      (e.type == EntryType.expense || e.type == EntryType.income) &&
+      e.planId == null &&
+      e.loanId == null &&
+      e.fdId == null;
+
+  /// Spending inside the trip's dates that does not have its tag yet.
+  List<Entry> untaggedInTrip(Tag t) => entries
+      .where((e) =>
+          e.type == EntryType.expense &&
+          taggable(e) &&
+          t.covers(e.date) &&
+          !tagsOf(e.id).contains(t.id))
+      .toList();
+
+  Future<int> saveTag(Tag t) async {
+    final map = t.toMap();
+    int id;
+    if (t.id == null) {
+      map.remove('id');
+      id = await _db.db.insert('tags', map);
+    } else {
+      id = t.id!;
+      await _db.db.update('tags', map, where: 'id = ?', whereArgs: [id]);
+    }
+    await _reload();
+    return id;
+  }
+
+  /// Adds the tag to these entries.
+  Future<void> addTagTo(int tagId, Iterable<int> entryIds) async {
+    final b = _db.db.batch();
+    for (final id in entryIds) {
+      b.insert('entry_tags', {'entry_id': id, 'tag_id': tagId}, conflictAlgorithm: _replace);
+    }
+    await b.commit(noResult: true);
+    await _reload();
+  }
+
+  /// Removes the tag. Its entries stay.
+  Future<void> deleteTag(int id) async {
+    await _db.db.transaction((txn) async {
+      await txn.delete('entry_tags', where: 'tag_id = ?', whereArgs: [id]);
+      await txn.delete('tags', where: 'id = ?', whereArgs: [id]);
+    });
+    await _reload();
+  }
+
+  // ----------------------------------------------------------- net worth
+
+  /// Balance of an account at the end of [day].
+  int balanceOn(Account a, DateTime day) {
+    final end = dateOnly(day);
+    var b = a.opening;
+    for (final e in entries) {
+      if (e.date.isAfter(end)) continue;
+      if (e.accountId == a.id || e.toAccountId == a.id) b += e.effectOn(a.id!);
+    }
+    return b;
+  }
+
+  /// Everything you have minus what you owe at the end of [day] (now when
+  /// null): your own accounts, FDs and money lent, less money borrowed.
+  int netWorthOn([DateTime? day]) =>
+      netWorthParts(day).fold(0, (s, p) => s + p.amount);
+
+  /// The pieces of net worth: positive ones are what you have, negative
+  /// ones what you owe.
+  List<WorthPart> netWorthParts([DateTime? day]) {
+    final now = day == null;
+    final d = dateOnly(day ?? today());
+    final out = <WorthPart>[];
+
+    final groups = <String, List<Account>>{};
+    for (final a in countedAccounts) {
+      final key = a.kind.isBank ? 'bank' : a.kind.name;
+      groups.putIfAbsent(key, () => []).add(a);
+    }
+    const labels = {
+      'bank': ('Bank accounts', 'Bank overdraft'),
+      'cash': ('Cash', 'Cash'),
+      'wallet': ('Wallets', 'Wallets'),
+      'card': ('Credit cards', 'Credit card dues'),
+    };
+    for (final key in ['bank', 'cash', 'wallet', 'card']) {
+      final list = groups[key];
+      if (list == null) continue;
+      final sum = list.fold(0, (s, a) => s + (now ? balanceOf(a.id!) : balanceOn(a, d)));
+      if (sum == 0 && key == 'card') continue;
+      final names = list.map((a) => a.name).toList();
+      out.add(WorthPart(
+        key,
+        sum < 0 ? labels[key]!.$2 : labels[key]!.$1,
+        names.length > 2 ? '${names.take(2).join(', ')} +${names.length - 2}' : names.join(', '),
+        sum,
+      ));
+    }
+
+    if (feature(Features.fds)) {
+      var value = 0;
+      var count = 0;
+      for (final f in fds) {
+        if (f.startDate.isAfter(d)) continue;
+        if (f.closed && f.closedDate != null && !f.closedDate!.isAfter(d)) continue;
+        value += fdValueOn(f, d);
+        count++;
+      }
+      if (count > 0) {
+        out.add(WorthPart('fd', 'Fixed deposits',
+            '$count ${count == 1 ? 'FD' : 'FDs'} · value ${now ? 'today' : 'that day'}', value));
+      }
+    }
+
+    if (feature(Features.lend)) {
+      for (final dir in LoanDirection.values) {
+        var sum = 0;
+        final people = <int>{};
+        var interest = false;
+        for (final l in loans.where((l) => l.direction == dir && !l.settled)) {
+          final st = statusOf(l, asOf: d);
+          if (st.total <= 0) continue;
+          sum += st.total;
+          people.add(l.personId);
+          if (st.interestDue > 0) interest = true;
+        }
+        if (sum == 0) continue;
+        final n = people.length;
+        final who = '$n ${n == 1 ? 'person' : 'people'}${interest ? ' · with interest' : ''}';
+        out.add(dir == LoanDirection.lent
+            ? WorthPart('lent', 'Money lent', who, sum)
+            : WorthPart('borrowed', 'Money borrowed', who, -sum));
+      }
+    }
+    return out;
+  }
+
+  /// Month-end net worth for the last [months] months, then today.
+  List<(DateTime, int)> netWorthHistory(int months) {
+    final t = today();
+    final out = <(DateTime, int)>[];
+    for (var i = months; i >= 1; i--) {
+      final m = addMonths(DateTime(t.year, t.month), -i);
+      final end = DateTime(m.year, m.month + 1, 0);
+      out.add((end, netWorthOn(end)));
+    }
+    out.add((t, netWorthOn()));
+    return out;
+  }
+
+  /// Months from the first entry (or account) to now, at most 120.
+  int get monthsOfData {
+    final t = today();
+    var first = DateTime(t.year, t.month);
+    if (entries.isNotEmpty) {
+      final o = entries.last.date;
+      final m = DateTime(o.year, o.month);
+      if (m.isBefore(first)) first = m;
+    }
+    return monthsBetween(first, DateTime(t.year, t.month)).clamp(1, 120);
+  }
+
+  /// Whether any plan is a loan EMI (their remaining amount is not known).
+  bool get hasEmiPlans =>
+      feature(Features.loans) && plans.any((p) => p.kind == PlanKind.loan && p.active && !isFinished(p));
+
   // -------------------------------------------------------------- backup
 
   static const backupFormat = 'funds-backup';
@@ -987,6 +1238,10 @@ class AppState extends ChangeNotifier {
       out['people']?.forEach(Person.fromMap);
       out['loans']?.forEach(Loan.fromMap);
       out['fds']?.forEach(Fd.fromMap);
+      out['tags']?.forEach(Tag.fromMap);
+      for (final r in out['entry_tags'] ?? const <Map<String, Object?>>[]) {
+        if (r['entry_id'] is! int || r['tag_id'] is! int) throw const FormatException('');
+      }
     } catch (_) {
       throw const FormatException('The backup file is damaged.');
     }

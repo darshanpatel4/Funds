@@ -20,7 +20,11 @@ class MainActivity : FlutterFragmentActivity() {
                         // Saving into Downloads without any storage permission needs Android 10+.
                         "supported" -> result.success(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
                         "save" -> result.success(
-                            save(call.argument<String>("name")!!, call.argument<ByteArray>("bytes")!!)
+                            save(
+                                call.argument<String>("name")!!,
+                                call.argument<ByteArray>("bytes")!!,
+                                call.argument<String>("mime") ?: "application/json",
+                            )
                         )
                         "list" -> result.success(list(call.argument<String>("prefix")!!))
                         "delete" -> result.success(
@@ -35,11 +39,11 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     /** Writes a file to Downloads/Funds. Files there stay if the app is uninstalled. */
-    private fun save(name: String, bytes: ByteArray): String {
+    private fun save(name: String, bytes: ByteArray, mime: String): String {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) throw IllegalStateException("Needs Android 10 or newer")
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, name)
-            put(MediaStore.Downloads.MIME_TYPE, "application/json")
+            put(MediaStore.Downloads.MIME_TYPE, mime)
             put(MediaStore.Downloads.RELATIVE_PATH, "Download/Funds")
             put(MediaStore.Downloads.IS_PENDING, 1)
         }

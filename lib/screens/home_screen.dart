@@ -15,7 +15,10 @@ import 'accounts_screen.dart';
 import 'goals_screen.dart';
 import 'fd_screen.dart';
 import 'lend_screen.dart';
+import 'net_worth_screen.dart';
+import 'report_screen.dart';
 import 'shell.dart';
+import 'tags_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -49,6 +52,14 @@ class HomeScreen extends StatelessWidget {
             if (s.feature(Features.budgets)) ...[
               const SizedBox(height: 12),
               _BudgetCard(state: s, now: now),
+            ],
+            if (_showReportCard(s)) ...[
+              const SizedBox(height: 12),
+              _ReportCard(state: s),
+            ],
+            if (s.feature(Features.tags) && s.tripOnNow != null) ...[
+              const SizedBox(height: 12),
+              _TripCard(state: s, trip: s.tripOnNow!),
             ],
             const SizedBox(height: 20),
             SectionHeader('Accounts',
@@ -285,6 +296,22 @@ class _BalanceCard extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Text(summary, style: ts(13, color: C.muted)),
+          const SizedBox(height: 14),
+          const Divider(height: 1, color: C.line),
+          InkWell(
+            onTap: () => openNetWorth(context),
+            child: Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Row(
+                children: [
+                  Text('Net worth ', style: ts(13, weight: FontWeight.w600, color: C.muted)),
+                  Expanded(child: Money(s.netWorthOn(), size: 13, colorBySign: true)),
+                  Text('See all', style: ts(13, weight: FontWeight.w800, color: C.accent)),
+                  const Icon(Icons.chevron_right_rounded, size: 18, color: C.accent),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -736,6 +763,177 @@ class _FdSection extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Last month's report shows on Home from the 1st until it is opened or
+/// hidden, if anything happened that month.
+bool _showReportCard(AppState s) {
+  final m = lastMonth();
+  if (s.setting(reportSeenKey(m)) == '1') return false;
+  return s.entries.any((e) =>
+      e.date.year == m.year &&
+      e.date.month == m.month &&
+      (e.type == EntryType.expense || e.type == EntryType.income) &&
+      s.countsEntry(e));
+}
+
+class _ReportCard extends StatelessWidget {
+  const _ReportCard({required this.state});
+
+  final AppState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = state;
+    final m = lastMonth();
+    final prev = addMonths(m, -1);
+    final spent = s.expenseInMonth(m);
+    final prevSpent = s.expenseInMonth(prev);
+    final income = s.incomeInMonth(m);
+    String amt(int v) => s.amountsHidden ? '₹••••' : money(v);
+    final name = DateFormat('MMMM').format(m);
+
+    String? line;
+    var good = true;
+    if (prevSpent > 0) {
+      final c = ((spent - prevSpent) * 100 / prevSpent).round();
+      good = c <= 0;
+      line = c == 0
+          ? 'Same as ${DateFormat('MMMM').format(prev)}'
+          : '${c.abs()}% ${c < 0 ? 'less' : 'more'} than ${DateFormat('MMMM').format(prev)}';
+    }
+    if (income > 0 && income > spent) {
+      final pct = ((income - spent) * 100 / income).round();
+      line = line == null ? 'Saved $pct%' : '$line · saved $pct%';
+    }
+
+    return Material(
+      color: C.accentTint,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: const BorderSide(color: C.accentDeep),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 6, 16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${name.toUpperCase()} REPORT',
+                      style: ts(12, weight: FontWeight.w800, color: C.onAccentSoft, letterSpacing: 0.3)),
+                  const SizedBox(height: 6),
+                  Text('You spent ${amt(spent)}', style: ts(16, weight: FontWeight.w800)),
+                  if (line != null) ...[
+                    const SizedBox(height: 2),
+                    Text(line,
+                        style: ts(13, weight: FontWeight.w700, color: good ? C.income : C.orange)),
+                  ],
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: 40,
+                    child: FilledButton(
+                      onPressed: () => openReport(context, m),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: C.accent,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: Text('See full report',
+                          style: ts(14, weight: FontWeight.w800, color: Colors.white)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Hide',
+              onPressed: () => s.setSetting(reportSeenKey(m), '1'),
+              icon: const Icon(Icons.close_rounded, size: 20, color: C.onAccentSoft),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The trip going on now, with what it has cost so far.
+class _TripCard extends StatelessWidget {
+  const _TripCard({required this.state, required this.trip});
+
+  final AppState state;
+  final Tag trip;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = state;
+    final spent = s.tagSpent(trip.id!);
+    final color = tagColor(trip.color);
+    final day = today().difference(trip.start!).inDays + 1;
+    String amt(int v) => s.amountsHidden ? '₹••••' : money(v);
+    final budget = trip.budget;
+
+    return CardBox(
+      onTap: () => openTag(context, trip.id!),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              TagIcon(trip),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(trip.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: ts(15, weight: FontWeight.w800)),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(999)),
+                          child: Text('ON NOW', style: ts(10, weight: FontWeight.w800, color: C.bg)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Day $day of ${trip.days}${trip.auto ? ' · new entries get #${trip.name}' : ''}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: ts(12, weight: FontWeight.w600, color: C.muted),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(child: Text('${amt(spent)} spent', style: ts(13, weight: FontWeight.w700))),
+              if (budget != null)
+                Text('of ${amt(budget)}', style: ts(13, weight: FontWeight.w700, color: C.muted)),
+            ],
+          ),
+          if (budget != null && budget > 0) ...[
+            const SizedBox(height: 6),
+            ProgressBar(spent / budget, color: spent <= budget ? color : C.expense, height: 8),
+          ],
+        ],
+      ),
     );
   }
 }
