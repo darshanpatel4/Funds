@@ -52,6 +52,16 @@ All your data stays on your phone: no account, no cloud, no internet access.
     <td align="center"><img src="docs/screenshots/11_accounts.png" width="240" alt="Accounts" /><br /><b>Accounts</b><br />Banks, cash, cards and family money kept separate</td>
     <td align="center"><img src="docs/screenshots/12_settings.png" width="240" alt="Settings" /><br /><b>Settings</b><br />Security, features, backup</td>
   </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/13_calendar.png" width="240" alt="Activity as a calendar" /><br /><b>Calendar</b><br />Spending each day, plans coming up</td>
+    <td align="center"><img src="docs/screenshots/14_report.png" width="240" alt="Monthly report" /><br /><b>Monthly report</b><br />How the month went, as PDF or Excel</td>
+    <td align="center"><img src="docs/screenshots/15_net_worth.png" width="240" alt="Net worth" /><br /><b>Net worth</b><br />What you have minus what you owe</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/16_trip.png" width="240" alt="One trip" /><br /><b>Tags &amp; trips</b><br />A trip's total by category, day or account</td>
+    <td></td>
+    <td></td>
+  </tr>
 </table>
 
 <sub>The screenshots show sample data.</sub>
