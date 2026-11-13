@@ -18,6 +18,7 @@ import 'lend_screen.dart';
 import 'net_worth_screen.dart';
 import 'report_screen.dart';
 import 'shell.dart';
+import 'sip_screen.dart';
 import 'tags_screen.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -72,6 +73,10 @@ class HomeScreen extends StatelessWidget {
             if (s.feature(Features.fds)) ...[
               const SizedBox(height: 20),
               _FdSection(state: s),
+            ],
+            if (s.feature(Features.sips)) ...[
+              const SizedBox(height: 20),
+              MutualFundsSection(state: s),
             ],
             ..._comingUp(context, s),
             ..._goalsOrBudgets(context, s, month),

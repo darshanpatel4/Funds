@@ -40,7 +40,7 @@ class ReportExport {
       ..sort((a, b) => a.date.compareTo(b.date));
     for (final e in list) {
       final signed = switch (e.type) {
-        EntryType.income || EntryType.loanIn || EntryType.depositIn => e.amount,
+        EntryType.income || EntryType.loanIn || EntryType.depositIn || EntryType.investIn => e.amount,
         EntryType.transfer => e.amount,
         _ => -e.amount,
       };
@@ -50,12 +50,15 @@ class ReportExport {
         EntryType.transfer => 'Transfer',
         EntryType.loanOut || EntryType.loanIn => 'Lend & borrow',
         EntryType.depositOut || EntryType.depositIn => 'Fixed deposit',
+        EntryType.investOut || EntryType.investIn => 'Mutual fund',
       };
       final note = e.loanId != null
           ? s.loanEntryTitle(e)
           : e.fdId != null
               ? s.fdEntryTitle(e)
-              : e.note;
+              : e.fundId != null
+                  ? s.fundEntryTitle(e)
+                  : e.note;
       rows.add([
         q(dayKey(e.date)),
         q(type),
@@ -128,6 +131,7 @@ class ReportExport {
     final summary = <List<String>>[
       ['You spent', money(r.spent)],
       ['Money in', money(r.income)],
+      if (r.invested > 0) ['You invested (SIPs & funds)', money(r.invested)],
       ['You saved', '${money(r.saved)}${r.savedPercent == null ? '' : ' (${r.savedPercent}%)'}'],
       if (r.changeText(monthName.format) != null)
         ['Compared with ${monthName.format(r.prevMonth)}', r.changeText(monthName.format)!],
@@ -222,13 +226,17 @@ class ReportExport {
                       ? s.loanEntryTitle(e)
                       : e.fdId != null
                           ? s.fdEntryTitle(e)
-                          : (e.note.isEmpty ? catForEntry(e).label : e.note),
+                          : e.fundId != null
+                              ? s.fundEntryTitle(e)
+                              : (e.note.isEmpty ? catForEntry(e).label : e.note),
                   e.type == EntryType.transfer ? 'Transfer' : _catName(catForEntry(e).key),
                   e.type == EntryType.transfer
                       ? '${s.accountName(e.accountId)} → ${s.accountName(e.toAccountId)}'
                       : s.accountName(e.accountId),
                   switch (e.type) {
-                    EntryType.income || EntryType.loanIn || EntryType.depositIn => money(e.amount, plus: true),
+                    EntryType.income || EntryType.loanIn || EntryType.depositIn || EntryType.investIn =>
+                      money(e.amount, plus: true),
+                    EntryType.investOut => money(e.amount),
                     EntryType.transfer => money(e.amount),
                     _ => money(-e.amount),
                   },

@@ -10,6 +10,7 @@ import '../widgets/ui.dart';
 import 'account_form_screen.dart';
 import 'fd_screen.dart';
 import 'lend_screen.dart';
+import 'sip_screen.dart';
 import 'tags_screen.dart';
 
 /// Opens the add/edit entry screen.
@@ -32,6 +33,11 @@ Future<void> openEntryForm(
   final fdId = entry?.fdId;
   if (fdId != null && context.read<AppState>().fd(fdId) != null) {
     return openFd(context, fdId);
+  }
+  // Mutual fund entries are managed on the fund's page.
+  final fundId = entry?.fundId;
+  if (fundId != null && context.read<AppState>().fund(fundId) != null) {
+    return openFund(context, fundId);
   }
   return Navigator.of(context).push(MaterialPageRoute(
     fullscreenDialog: true,

@@ -8,8 +8,17 @@ import '../state/app_state.dart';
 import '../theme.dart';
 import '../utils/format.dart';
 import '../widgets/ui.dart';
+import 'sip_screen.dart';
 
 Future<void> openPlanForm(BuildContext context, {required PlanKind kind, Plan? plan}) {
+  // SIPs belong to a mutual fund and are managed there.
+  if (kind == PlanKind.sip) {
+    final fundId = plan?.fundId;
+    if (fundId != null && context.read<AppState>().fund(fundId) != null) {
+      return openFund(context, fundId);
+    }
+    return openFundForm(context);
+  }
   return Navigator.of(context).push(MaterialPageRoute(
     builder: (_) => PlanFormScreen(kind: kind, plan: plan),
   ));

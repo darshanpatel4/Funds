@@ -45,7 +45,26 @@ const systemCats = <Cat>[
   loanCat,
   Cat('interest_paid', 'Interest paid', Icons.percent_rounded, C.orange),
   fdCat,
+  fundCat,
+  Cat('fund_profit', 'Fund profit', Icons.trending_up_rounded, C.income),
 ];
+
+/// Money put into or taken out of a mutual fund.
+const fundCat = Cat('fund', 'Mutual fund', Icons.trending_up_rounded, C.transfer);
+
+/// Colour for each kind of mutual fund.
+Color fundTypeColor(String type) => switch (type) {
+      'large' => C.blue,
+      'mid' => C.purple,
+      'small' => const Color(0xFFFF8FB1),
+      'flexi' => C.transfer,
+      'multi' => C.teal,
+      'index' => C.accent,
+      'elss' => C.yellow,
+      'hybrid' => C.orange,
+      'debt' => C.income,
+      _ => C.muted,
+    };
 
 /// Money put into or taken out of a fixed deposit.
 const fdCat = Cat('fd', 'Fixed deposit', Icons.lock_outline_rounded, C.yellow);
@@ -76,6 +95,7 @@ Cat catForEntry(Entry e) => switch (e.type) {
       EntryType.transfer => transferCat,
       EntryType.loanOut || EntryType.loanIn => loanCat,
       EntryType.depositOut || EntryType.depositIn => fdCat,
+      EntryType.investOut || EntryType.investIn => fundCat,
       _ => catFor(e.category),
     };
 

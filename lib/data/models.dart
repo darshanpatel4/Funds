@@ -85,9 +85,20 @@ class Account {
 
 /// [loanOut] and [loanIn] move money between an account and a person
 /// (lending, borrowing, paying back). [depositOut] and [depositIn] move
-/// money into and out of a fixed deposit. None of these are spending or
-/// income.
-enum EntryType { expense, income, transfer, loanOut, loanIn, depositOut, depositIn }
+/// money into and out of a fixed deposit, [investOut] and [investIn] into
+/// and out of a mutual fund (SIPs, lump sums, withdrawals). None of these
+/// are spending or income.
+enum EntryType {
+  expense,
+  income,
+  transfer,
+  loanOut,
+  loanIn,
+  depositOut,
+  depositIn,
+  investOut,
+  investIn,
+}
 
 class Entry {
   final int? id;
@@ -115,6 +126,10 @@ class Entry {
   /// money back, or its interest).
   final int? fdId;
 
+  /// Set when the entry belongs to a mutual fund (a SIP, a lump sum, a
+  /// withdrawal or its profit).
+  final int? fundId;
+
   const Entry({
     this.id,
     required this.type,
@@ -128,6 +143,7 @@ class Entry {
     this.planId,
     this.loanId,
     this.fdId,
+    this.fundId,
   });
 
   bool get isLoanMove => type == EntryType.loanOut || type == EntryType.loanIn;
@@ -138,10 +154,12 @@ class Entry {
       case EntryType.income:
       case EntryType.loanIn:
       case EntryType.depositIn:
+      case EntryType.investIn:
         return accountId == account ? amount : 0;
       case EntryType.expense:
       case EntryType.loanOut:
       case EntryType.depositOut:
+      case EntryType.investOut:
         return accountId == account ? -amount : 0;
       case EntryType.transfer:
         var e = 0;
@@ -164,6 +182,7 @@ class Entry {
         'plan_id': planId,
         'loan_id': loanId,
         'fd_id': fdId,
+        'fund_id': fundId,
       };
 
   factory Entry.fromMap(Map<String, Object?> m) => Entry(
@@ -179,6 +198,7 @@ class Entry {
         planId: m['plan_id'] as int?,
         loanId: m['loan_id'] as int?,
         fdId: m['fd_id'] as int?,
+        fundId: m['fund_id'] as int?,
       );
 }
 
@@ -424,6 +444,9 @@ class Plan {
   final String category;
   final int createdAt;
 
+  /// SIPs only: the mutual fund the money goes into.
+  final int? fundId;
+
   const Plan({
     this.id,
     required this.kind,
@@ -437,6 +460,7 @@ class Plan {
     this.active = true,
     required this.category,
     required this.createdAt,
+    this.fundId,
   });
 
   Plan copyWith({String? lastPosted, bool? active}) => Plan(
@@ -452,6 +476,7 @@ class Plan {
         active: active ?? this.active,
         category: category,
         createdAt: createdAt,
+        fundId: fundId,
       );
 
   Map<String, Object?> toMap() => {
@@ -467,6 +492,7 @@ class Plan {
         'active': active ? 1 : 0,
         'category': category,
         'created_at': createdAt,
+        'fund_id': fundId,
       };
 
   factory Plan.fromMap(Map<String, Object?> m) => Plan(
@@ -482,7 +508,89 @@ class Plan {
         active: (m['active'] as int?) != 0,
         category: (m['category'] as String?) ?? 'bills',
         createdAt: (m['created_at'] as int?) ?? 0,
+        fundId: m['fund_id'] as int?,
       );
+}
+
+/// A mutual fund the user invests in. Funds tracks what was put in (not
+/// the market value): [alreadyInvested] from before the app, plus the SIP
+/// and lump-sum entries linked by fundId, less withdrawals.
+class MutualFund {
+  final int? id;
+  final String name;
+
+  /// Key from [fundTypes], e.g. 'small' or 'elss'.
+  final String type;
+
+  /// Money put in before the fund was added to Funds (not taken from any
+  /// account).
+  final int alreadyInvested;
+
+  /// Month the investing started, if known.
+  final DateTime? started;
+  final bool closed;
+  final DateTime? closedDate;
+
+  /// What was received when everything was sold.
+  final int? closedAmount;
+  final int createdAt;
+
+  const MutualFund({
+    this.id,
+    required this.name,
+    this.type = 'other',
+    this.alreadyInvested = 0,
+    this.started,
+    this.closed = false,
+    this.closedDate,
+    this.closedAmount,
+    required this.createdAt,
+  });
+
+  Map<String, Object?> toMap() => {
+        'id': id,
+        'name': name,
+        'type': type,
+        'already_invested': alreadyInvested,
+        'started': started == null ? null : monthKey(started!),
+        'closed': closed ? 1 : 0,
+        'closed_date': closedDate == null ? null : dayKey(closedDate!),
+        'closed_amount': closedAmount,
+        'created_at': createdAt,
+      };
+
+  factory MutualFund.fromMap(Map<String, Object?> m) => MutualFund(
+        id: m['id'] as int?,
+        name: m['name'] as String,
+        type: (m['type'] as String?) ?? 'other',
+        alreadyInvested: (m['already_invested'] as int?) ?? 0,
+        started: m['started'] == null ? null : parseMonth(m['started'] as String),
+        closed: (m['closed'] as int?) == 1,
+        closedDate: m['closed_date'] == null ? null : parseDay(m['closed_date'] as String),
+        closedAmount: m['closed_amount'] as int?,
+        createdAt: (m['created_at'] as int?) ?? 0,
+      );
+}
+
+/// Kinds of mutual fund: (key, label).
+const fundTypes = [
+  ('large', 'Large cap'),
+  ('mid', 'Mid cap'),
+  ('small', 'Small cap'),
+  ('flexi', 'Flexi cap'),
+  ('multi', 'Multi cap'),
+  ('index', 'Index'),
+  ('elss', 'ELSS (tax saver)'),
+  ('hybrid', 'Hybrid'),
+  ('debt', 'Debt'),
+  ('other', 'Other'),
+];
+
+String fundTypeLabel(String key) {
+  for (final (k, label) in fundTypes) {
+    if (k == key) return label;
+  }
+  return 'Other';
 }
 
 class Goal {

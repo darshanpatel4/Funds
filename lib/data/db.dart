@@ -9,8 +9,21 @@ class FundsDb {
 
   static const tables = [
     'accounts', 'entries', 'plans', 'goals', 'budgets', 'settings', 'people', 'loans', 'fds',
-    'tags', 'entry_tags',
+    'tags', 'entry_tags', 'funds',
   ];
+
+  static const _fundsTable = '''
+    CREATE TABLE funds (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'other',
+      already_invested INTEGER NOT NULL DEFAULT 0,
+      started TEXT,
+      closed INTEGER NOT NULL DEFAULT 0,
+      closed_date TEXT,
+      closed_amount INTEGER,
+      created_at INTEGER NOT NULL
+    )''';
 
   static const _tagsTable = '''
     CREATE TABLE tags (
@@ -75,7 +88,7 @@ class FundsDb {
     final dir = await getDatabasesPath();
     final db = await openDatabase(
       p.join(dir, 'funds.db'),
-      version: 5,
+      version: 6,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           // v2: accounts can be left out of the total balance.
@@ -97,6 +110,12 @@ class FundsDb {
           // v5: tags & trips.
           await db.execute(_tagsTable);
           await db.execute(_entryTagsTable);
+        }
+        if (oldVersion < 6) {
+          // v6: mutual funds. Old SIP plans are turned into funds by AppState.
+          await db.execute(_fundsTable);
+          await db.execute('ALTER TABLE plans ADD COLUMN fund_id INTEGER');
+          await db.execute('ALTER TABLE entries ADD COLUMN fund_id INTEGER');
         }
       },
       onCreate: (db, version) async {
@@ -126,13 +145,15 @@ class FundsDb {
             created_at INTEGER NOT NULL,
             plan_id INTEGER,
             loan_id INTEGER,
-            fd_id INTEGER
+            fd_id INTEGER,
+            fund_id INTEGER
           )''');
         b.execute(_peopleTable);
         b.execute(_loansTable);
         b.execute(_fdsTable);
         b.execute(_tagsTable);
         b.execute(_entryTagsTable);
+        b.execute(_fundsTable);
         b.execute('CREATE INDEX entries_date ON entries(date)');
         b.execute('CREATE INDEX entries_account ON entries(account_id)');
         b.execute('''
@@ -148,7 +169,8 @@ class FundsDb {
             tenure INTEGER,
             active INTEGER NOT NULL DEFAULT 1,
             category TEXT NOT NULL,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            fund_id INTEGER
           )''');
         b.execute('''
           CREATE TABLE goals (

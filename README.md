@@ -17,11 +17,12 @@ All your data stays on your phone: no account, no cloud, no internet access.
 - **Entries:** expense, income and transfer, with categories, notes and dates.
 - **Activity:** one month at a time: by day (days fold up), by category, or as a **calendar** that shows what you spent each day and the plans coming up. There's a last-7-days spending chart, filters by account, category and tag, and search across all months.
 - **Monthly budget:** one spending limit for the month, plus optional limits per category.
-- **Plans:** salary, SIPs, bills & rent and loan EMIs are added to their account automatically on their day.
+- **Plans:** salary, bills & rent and loan EMIs are added to their account automatically on their day.
+- **Mutual funds & SIPs:** add each fund (small cap, flexi cap, ELSS…) with its monthly SIP and what you had invested before. Each SIP moves money from your account into the fund automatically: it's not counted as spending, and the fund stays in your net worth. See the total invested, the split by fund type, lump sums and withdrawals (profit is counted when you sell everything). Funds tracks what you put in, not the market value.
 - **Lend & borrow:** keep track of money you lent to or borrowed from people, with optional simple interest. Payments go to interest first, and you can send WhatsApp reminders.
 - **Fixed deposits:** worth today and at maturity (compounded quarterly, monthly, yearly or simple). At maturity you choose to withdraw or renew, with or without the interest.
 - **Monthly report:** on the 1st, see how last month went: spent vs the month before, saved, budget, where the money went, a 6-month chart and highlights. Save it as a PDF or an Excel (CSV) file with every entry.
-- **Net worth:** everything you have (accounts, FDs, money lent) minus what you owe (card dues, money borrowed), with a graph by month.
+- **Net worth:** everything you have (accounts, FDs, mutual funds, money lent) minus what you owe (card dues, money borrowed), with a graph by month.
 - **Tags & trips:** group entries from any account or month, like "Goa trip" or "Office claim", and see the total by category, day or account. A trip has dates and an optional budget; while it's on, new entries get its tag by themselves.
 - **Savings goals.**
 - **Security:** fingerprint / face / phone PIN lock, and an option to hide amounts.
@@ -88,12 +89,12 @@ The release build is signed with the debug key. Before publishing to the Play St
 |---|---|
 | `lib/main.dart` | App start, app lock |
 | `lib/theme.dart` | Colours and text styles |
-| `lib/data/models.dart` | Account, Entry, Plan, Goal, Budget, Person, Loan, Fd, Tag |
+| `lib/data/models.dart` | Account, Entry, Plan, Goal, Budget, Person, Loan, Fd, Tag, MutualFund |
 | `lib/data/db.dart` | SQLite tables and upgrades, backup dump/restore |
 | `lib/data/recurring.dart` | When plans (salary, SIPs, EMIs) are due |
 | `lib/data/lending.dart` | Lend & borrow interest and payment split |
 | `lib/data/deposits.dart` | Fixed deposit value and maturity |
-| `lib/state/app_state.dart` | All data in memory, balances, net worth, tags, saving, automatic entries |
+| `lib/state/app_state.dart` | All data in memory, balances, net worth, tags, mutual funds, saving, automatic entries |
 | `lib/state/report.dart` | Numbers for the monthly report |
 | `lib/services/backup_service.dart` | Automatic backup, Downloads/Funds, password protection |
 | `lib/services/reminders.dart` | Scheduling reminder notifications |

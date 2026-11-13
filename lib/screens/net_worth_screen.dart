@@ -9,6 +9,7 @@ import '../widgets/ui.dart';
 import 'accounts_screen.dart';
 import 'fd_screen.dart';
 import 'lend_screen.dart';
+import 'sip_screen.dart';
 
 Future<void> openNetWorth(BuildContext context) => Navigator.of(context)
     .push(MaterialPageRoute(builder: (_) => const NetWorthScreen()));
@@ -19,6 +20,7 @@ Future<void> openNetWorth(BuildContext context) => Navigator.of(context)
       'wallet' => (Icons.account_balance_wallet_outlined, C.purple),
       'card' => (Icons.credit_card_rounded, C.pink),
       'fd' => (Icons.lock_outline_rounded, C.yellow),
+      'mf' => (Icons.trending_up_rounded, C.transfer),
       'lent' => (Icons.south_west_rounded, C.income),
       _ => (Icons.north_east_rounded, C.orange),
     };
@@ -39,6 +41,8 @@ class _NetWorthScreenState extends State<NetWorthScreen> {
     switch (kind) {
       case 'fd':
         openFdList(context);
+      case 'mf':
+        openSips(context);
       case 'lent':
       case 'borrowed':
         openLend(context);

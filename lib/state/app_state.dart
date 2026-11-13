@@ -57,6 +57,8 @@ class AppState extends ChangeNotifier {
   List<Loan> loans = [];
   List<Fd> fds = [];
   List<Tag> tags = [];
+  List<MutualFund> funds = [];
+  Map<int, List<Entry>> _fundEntries = {};
   Map<int, Set<int>> _entryTags = {};
   Map<int, List<Entry>> _tagEntries = {};
   Map<int, List<Entry>> _loanEntries = {};
@@ -73,6 +75,7 @@ class AppState extends ChangeNotifier {
   static Future<AppState> create() async {
     final s = AppState(await FundsDb.open());
     await s._load();
+    await s._convertOldSips();
     s.amountsHidden = s.hideAmountsByDefault;
     await s.postDuePlans();
     return s;
@@ -96,6 +99,7 @@ class AppState extends ChangeNotifier {
         .toList();
     loans = (await db.query('loans', orderBy: 'id')).map(Loan.fromMap).toList();
     fds = (await db.query('fds', orderBy: 'maturity_date, id')).map(Fd.fromMap).toList();
+    funds = (await db.query('funds', orderBy: 'id')).map(MutualFund.fromMap).toList();
     // Links to entries that were deleted (with their account, person...).
     await db.execute(
         'DELETE FROM entry_tags WHERE entry_id NOT IN (SELECT id FROM entries) '
@@ -139,6 +143,13 @@ class AppState extends ChangeNotifier {
       }
     }
     _tagEntries = byTag;
+
+    final byFund = <int, List<Entry>>{};
+    for (final e in entries) {
+      final id = e.fundId;
+      if (id != null) byFund.putIfAbsent(id, () => []).add(e);
+    }
+    _fundEntries = byFund;
   }
 
   Future<void> _reload() async {
@@ -411,16 +422,22 @@ class AppState extends ChangeNotifier {
         if (!planVisible(p) || account(p.accountId) == null) continue;
         final months = dueMonths(p, now);
         if (months.isEmpty) continue;
+        // A SIP moves money into its fund; without a fund it waits.
+        final sip = p.kind == PlanKind.sip;
+        if (sip && fund(p.fundId) == null) continue;
         for (final m in months) {
           final entry = Entry(
-            type: p.kind.isIncome ? EntryType.income : EntryType.expense,
+            type: sip
+                ? EntryType.investOut
+                : (p.kind.isIncome ? EntryType.income : EntryType.expense),
             amount: p.amount,
             accountId: p.accountId,
-            category: planCategory(p),
-            note: p.name,
+            category: sip ? 'fund' : planCategory(p),
+            note: sip ? '' : p.name,
             date: dueDateIn(m.year, m.month, p.day),
             createdAt: now.millisecondsSinceEpoch,
             planId: p.id,
+            fundId: sip ? p.fundId : null,
           ).toMap()
             ..remove('id');
           await txn.insert('entries', entry);
@@ -1058,6 +1075,270 @@ class AppState extends ChangeNotifier {
     await _reload();
   }
 
+  // -------------------------------------------------------- mutual funds
+
+  MutualFund? fund(int? id) {
+    for (final f in funds) {
+      if (f.id == id) return f;
+    }
+    return null;
+  }
+
+  List<MutualFund> get openFunds => funds.where((f) => !f.closed).toList();
+
+  /// Money moves of one fund, newest first.
+  List<Entry> fundEntriesOf(int fundId) => _fundEntries[fundId] ?? const [];
+
+  /// The monthly SIP of a fund, if it has one.
+  Plan? fundPlan(MutualFund f) {
+    for (final p in plans) {
+      if (p.kind == PlanKind.sip && p.fundId == f.id) return p;
+    }
+    return null;
+  }
+
+  /// When the money from before Funds counts from.
+  DateTime _fundStart(MutualFund f) =>
+      f.started ?? dateOnly(DateTime.fromMillisecondsSinceEpoch(f.createdAt));
+
+  /// What is in the fund now (or at the end of [asOf]): money put in less
+  /// money taken out. A closed fund holds nothing.
+  int investedIn(MutualFund f, [DateTime? asOf]) {
+    final d = asOf == null ? null : dateOnly(asOf);
+    if (f.closed && (d == null || f.closedDate == null || !f.closedDate!.isAfter(d))) return 0;
+    var v = (d == null || !_fundStart(f).isAfter(d)) ? f.alreadyInvested : 0;
+    for (final e in fundEntriesOf(f.id!)) {
+      if (d != null && e.date.isAfter(d)) continue;
+      if (e.type == EntryType.investOut) v += e.amount;
+      if (e.type == EntryType.investIn) v -= e.amount;
+    }
+    return v < 0 ? 0 : v;
+  }
+
+  /// Everything ever put in: before Funds, SIPs and lump sums.
+  int putInto(MutualFund f) => fundEntriesOf(f.id!)
+      .where((e) => e.type == EntryType.investOut)
+      .fold(f.alreadyInvested, (s, e) => s + e.amount);
+
+  /// Put in through Funds (SIPs and lump sums).
+  int addedInFunds(MutualFund f) => putInto(f) - f.alreadyInvested;
+
+  /// Taken out before closing (part withdrawals).
+  int takenOut(MutualFund f) => fundEntriesOf(f.id!)
+      .where((e) => e.type == EntryType.investIn)
+      .fold(0, (s, e) => s + e.amount);
+
+  int get totalInvested => openFunds.fold(0, (s, f) => s + investedIn(f));
+
+  /// Active SIPs of open funds.
+  List<Plan> get activeSips => [
+        for (final f in openFunds)
+          if (fundPlan(f) case final p? when p.active) p,
+      ];
+
+  int get sipMonthly => activeSips.fold(0, (s, p) => s + p.amount);
+
+  /// The SIP that comes next.
+  Plan? get nextSip {
+    Plan? best;
+    DateTime? bestDate;
+    for (final p in activeSips) {
+      final d = nextDueDate(p);
+      if (d != null && (bestDate == null || d.isBefore(bestDate))) {
+        best = p;
+        bestDate = d;
+      }
+    }
+    return best;
+  }
+
+  /// Money put into funds this calendar year (SIPs and lump sums).
+  int get investedThisYear {
+    final y = today().year;
+    return entries
+        .where((e) => e.type == EntryType.investOut && e.date.year == y && countsEntry(e))
+        .fold(0, (s, e) => s + e.amount);
+  }
+
+  String fundEntryTitle(Entry e) {
+    final name = fund(e.fundId)?.name ?? 'Mutual fund';
+    return switch (e.type) {
+      EntryType.investOut => e.planId != null ? 'SIP · $name' : 'Lump sum · $name',
+      EntryType.investIn => 'Taken out of $name',
+      _ => 'Profit from $name',
+    };
+  }
+
+  /// Saves a fund. With [sipAmount], [sipDay] and [sipAccount] it has a
+  /// monthly SIP (added or changed); without, any SIP is removed.
+  Future<int> saveFund(MutualFund f, {int? sipAmount, int? sipDay, int? sipAccount}) async {
+    final now = DateTime.now();
+    final existing = f.id == null ? null : fundPlan(f);
+    late int id;
+    await _db.db.transaction((txn) async {
+      if (f.id == null) {
+        id = await txn.insert('funds', f.toMap()..remove('id'));
+      } else {
+        id = f.id!;
+        await txn.update('funds', f.toMap(), where: 'id = ?', whereArgs: [id]);
+      }
+      final hasSip = sipAmount != null && sipDay != null && sipAccount != null;
+      if (hasSip && existing != null) {
+        await txn.update(
+          'plans',
+          {'name': f.name, 'amount': sipAmount, 'day': sipDay, 'account_id': sipAccount},
+          where: 'id = ?',
+          whereArgs: [existing.id],
+        );
+      } else if (hasSip) {
+        await txn.insert(
+          'plans',
+          Plan(
+            kind: PlanKind.sip,
+            name: f.name,
+            amount: sipAmount,
+            day: sipDay,
+            accountId: sipAccount,
+            startMonth: firstMonthFor(sipDay, now),
+            category: 'fund',
+            createdAt: now.millisecondsSinceEpoch,
+            fundId: id,
+          ).toMap()
+            ..remove('id'),
+        );
+      } else if (existing != null) {
+        await txn.delete('plans', where: 'id = ?', whereArgs: [existing.id]);
+      }
+    });
+    await _load();
+    await postDuePlans(notify: false);
+    notifyListeners();
+    return id;
+  }
+
+  /// Puts extra money (a lump sum) into the fund.
+  Future<void> addToFund(MutualFund f, int amount, int accountId, DateTime date) async {
+    await _db.db.insert(
+      'entries',
+      Entry(
+        type: EntryType.investOut,
+        amount: amount,
+        accountId: accountId,
+        category: 'fund',
+        date: dateOnly(date),
+        createdAt: DateTime.now().millisecondsSinceEpoch,
+        fundId: f.id,
+      ).toMap()
+        ..remove('id'),
+    );
+    await _reload();
+  }
+
+  /// Money taken out of a fund. A part withdrawal lowers what is invested.
+  /// With [all] the fund is closed: up to what was invested comes back, and
+  /// anything above it is profit (income). Returns (money back, profit).
+  Future<(int, int)> withdrawFromFund(MutualFund f, int amount, int accountId, DateTime date,
+      {required bool all}) async {
+    final invested = investedIn(f);
+    final back = all ? (amount < invested ? amount : invested) : amount;
+    final profit = all ? amount - back : 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db.db.transaction((txn) async {
+      if (back > 0) {
+        await txn.insert(
+          'entries',
+          Entry(
+            type: EntryType.investIn,
+            amount: back,
+            accountId: accountId,
+            category: 'fund',
+            date: dateOnly(date),
+            createdAt: now,
+            fundId: f.id,
+          ).toMap()
+            ..remove('id'),
+        );
+      }
+      if (profit > 0) {
+        await txn.insert(
+          'entries',
+          Entry(
+            type: EntryType.income,
+            amount: profit,
+            accountId: accountId,
+            category: 'fund_profit',
+            date: dateOnly(date),
+            createdAt: now + 1,
+            fundId: f.id,
+          ).toMap()
+            ..remove('id'),
+        );
+      }
+      if (all) {
+        await txn.update(
+          'funds',
+          {'closed': 1, 'closed_date': dayKey(date), 'closed_amount': amount},
+          where: 'id = ?',
+          whereArgs: [f.id],
+        );
+        // Its SIP stops; past SIP entries stay.
+        await txn.delete('plans', where: 'fund_id = ? AND kind = ?', whereArgs: [f.id, PlanKind.sip.name]);
+      }
+    });
+    await _reload();
+    return (back, profit);
+  }
+
+  /// Pauses or restarts the fund's SIP. A restarted SIP begins on its next
+  /// date; paused months are not added.
+  Future<void> setSipActive(MutualFund f, bool active) async {
+    final p = fundPlan(f);
+    if (p == null) return;
+    final values = <String, Object?>{'active': active ? 1 : 0};
+    if (active) {
+      final first = parseMonth(firstMonthFor(p.day, DateTime.now()));
+      values['last_posted'] = monthKey(addMonths(first, -1));
+    }
+    await _db.db.update('plans', values, where: 'id = ?', whereArgs: [p.id]);
+    await _reload();
+  }
+
+  /// Deletes the fund, its SIP and its money moves (account balances go
+  /// back).
+  Future<void> deleteFund(MutualFund f) async {
+    await _db.db.transaction((txn) async {
+      await txn.delete('entries', where: 'fund_id = ?', whereArgs: [f.id]);
+      await txn.delete('plans', where: 'fund_id = ?', whereArgs: [f.id]);
+      await txn.delete('funds', where: 'id = ?', whereArgs: [f.id]);
+    });
+    await _reload();
+  }
+
+  /// Older versions saved SIPs as spending. Each old SIP plan becomes a
+  /// fund, and its past instalments become money moved into that fund.
+  Future<void> _convertOldSips() async {
+    final old = plans.where((p) => p.kind == PlanKind.sip && fund(p.fundId) == null).toList();
+    if (old.isEmpty) return;
+    await _db.db.transaction((txn) async {
+      for (final p in old) {
+        final id = await txn.insert(
+          'funds',
+          MutualFund(name: p.name, started: parseMonth(p.startMonth), createdAt: p.createdAt).toMap()
+            ..remove('id'),
+        );
+        await txn.update('plans', {'fund_id': id, 'category': 'fund'},
+            where: 'id = ?', whereArgs: [p.id]);
+        await txn.update(
+          'entries',
+          {'type': EntryType.investOut.name, 'fund_id': id, 'category': 'fund', 'note': ''},
+          where: 'plan_id = ? AND type = ?',
+          whereArgs: [p.id, EntryType.expense.name],
+        );
+      }
+    });
+    await _load();
+  }
+
   // ----------------------------------------------------------- net worth
 
   /// Balance of an account at the end of [day].
@@ -1120,6 +1401,21 @@ class AppState extends ChangeNotifier {
       if (count > 0) {
         out.add(WorthPart('fd', 'Fixed deposits',
             '$count ${count == 1 ? 'FD' : 'FDs'} · value ${now ? 'today' : 'that day'}', value));
+      }
+    }
+
+    if (feature(Features.sips)) {
+      var value = 0;
+      var count = 0;
+      for (final f in funds) {
+        final v = now ? investedIn(f) : investedIn(f, d);
+        if (v <= 0) continue;
+        value += v;
+        count++;
+      }
+      if (count > 0) {
+        out.add(WorthPart('mf', 'Mutual funds',
+            '$count ${count == 1 ? 'fund' : 'funds'} · what you invested', value));
       }
     }
 
@@ -1239,6 +1535,7 @@ class AppState extends ChangeNotifier {
       out['loans']?.forEach(Loan.fromMap);
       out['fds']?.forEach(Fd.fromMap);
       out['tags']?.forEach(Tag.fromMap);
+      out['funds']?.forEach(MutualFund.fromMap);
       for (final r in out['entry_tags'] ?? const <Map<String, Object?>>[]) {
         if (r['entry_id'] is! int || r['tag_id'] is! int) throw const FormatException('');
       }
@@ -1261,6 +1558,7 @@ class AppState extends ChangeNotifier {
     ];
     await _db.restore({...data, 'settings': incoming});
     await _load();
+    await _convertOldSips();
     amountsHidden = hideAmountsByDefault;
     await postDuePlans(notify: false);
     notifyListeners();

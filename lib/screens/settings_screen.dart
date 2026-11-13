@@ -40,7 +40,7 @@ const _features = [
   (Features.salary, Icons.work_outline_rounded, C.accent, 'Salary',
       'Monthly salary credited automatically'),
   (Features.sips, Icons.trending_up_rounded, C.transfer, 'SIPs & investments',
-      'Mutual fund SIPs deducted on their date'),
+      'Mutual funds, SIPs and what you invested'),
   (Features.bills, Icons.receipt_long_outlined, C.blue, 'Bills & rent',
       'Rent, subscriptions and fixed payments'),
   (Features.loans, Icons.account_balance_outlined, C.yellow, 'Loans & EMIs',

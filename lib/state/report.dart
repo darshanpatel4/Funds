@@ -32,6 +32,9 @@ class MonthReport {
   final int spent;
   final int prevSpent;
   final int income;
+
+  /// Money put into mutual funds (not spending).
+  final int invested;
   final int? budget;
   final int budgetSpent;
   final List<OverLine> overCategories;
@@ -60,6 +63,7 @@ class MonthReport {
     required this.spent,
     required this.prevSpent,
     required this.income,
+    required this.invested,
     required this.budget,
     required this.budgetSpent,
     required this.overCategories,
@@ -171,6 +175,9 @@ class MonthReport {
       spent: spent,
       prevSpent: prevSpent,
       income: s.incomeInMonth(m),
+      invested: mine
+          .where((e) => e.type == EntryType.investOut && inMonth(e, m))
+          .fold(0, (a, e) => a + e.amount),
       budget: s.feature(Features.budgets) ? s.overallBudget : null,
       budgetSpent: s.overallSpent(m),
       overCategories: over,

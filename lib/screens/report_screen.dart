@@ -253,6 +253,27 @@ class _Summary extends StatelessWidget {
               ),
             ],
           ),
+          if (r.invested > 0) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                const Icon(Icons.trending_up_rounded, size: 16, color: C.transfer),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(children: [
+                      TextSpan(
+                          text: 'You invested ${m(r.invested)}',
+                          style: ts(13, weight: FontWeight.w800, color: C.transfer)),
+                      TextSpan(
+                          text: ' in SIPs & funds. It is part of what you saved, not spending.',
+                          style: ts(13, weight: FontWeight.w600, color: C.muted)),
+                    ]),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );

@@ -609,17 +609,20 @@ class EntryRow extends StatelessWidget {
     final cat = catForEntry(entry);
     final isLoan = entry.loanId != null;
     final isFd = entry.fdId != null;
+    final isFund = entry.fundId != null;
     final title = isLoan
         ? s.loanEntryTitle(entry)
         : isFd
             ? s.fdEntryTitle(entry)
-            : entry.note.trim().isNotEmpty
-                ? entry.note.trim()
-                : cat.label;
+            : isFund
+                ? s.fundEntryTitle(entry)
+                : entry.note.trim().isNotEmpty
+                    ? entry.note.trim()
+                    : cat.label;
 
     final parts = <String>[];
     if (showDate) parts.add(shortDate(entry.date));
-    if (isLoan || isFd) {
+    if (isLoan || isFd || isFund) {
       if (entry.note.trim().isNotEmpty) parts.add(entry.note.trim());
       if (forAccount == null) parts.add(s.accountName(entry.accountId));
     } else if (entry.type == EntryType.transfer) {
@@ -661,6 +664,13 @@ class EntryRow extends StatelessWidget {
         case EntryType.depositIn:
           signed = entry.amount;
           color = C.yellow;
+        case EntryType.investOut:
+          signed = entry.amount;
+          plus = false;
+          color = C.transfer;
+        case EntryType.investIn:
+          signed = entry.amount;
+          color = C.transfer;
       }
     }
 
